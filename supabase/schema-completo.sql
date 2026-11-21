@@ -356,3 +356,16 @@ CREATE POLICY "Admins gerenciam api_keys" ON public.api_keys FOR ALL TO authenti
 INSERT INTO storage.buckets (id, name, public)
 VALUES ('certificados-a1', 'certificados-a1', false)
 ON CONFLICT (id) DO NOTHING;
+
+-- 16. PERMISSÕES GLOBAIS (GRANTS) PARA PUBLIC / AUTHENTICATED
+GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role;
+GRANT ALL ON ALL TABLES IN SCHEMA public TO authenticated, service_role;
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO anon;
+GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO authenticated, service_role;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO anon;
+
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO authenticated, service_role;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO anon;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO authenticated, service_role;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO anon;
+
