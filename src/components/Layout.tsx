@@ -41,9 +41,8 @@ export default function Layout({ children }: LayoutProps) {
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const location = useLocation();
-  const { role, nome } = useAuth();
-  const userRole: UserRole = role ?? 'vendedor';
-  const setUserRole = () => {};
+  const { role, nome, setUserRole } = useAuth();
+  const userRole: UserRole = role ?? 'admin';
 
   const initials = nome
     ? nome.split(' ').map((n: string) => n[0]).slice(0, 2).join('').toUpperCase()
@@ -111,12 +110,17 @@ export default function Layout({ children }: LayoutProps) {
         <div className="px-3 pb-2">
           <div className="rounded-lg p-3" style={{ background: 'hsl(var(--sidebar-accent))' }}>
             <p className="text-xs font-semibold text-white/60 uppercase tracking-wider mb-1">Perfil ativo</p>
-            <span className={cn(
-              'inline-flex items-center px-2.5 py-1 rounded-md text-xs font-bold',
-              userRole === 'admin' ? 'bg-primary text-white' : 'bg-white/10 text-white/70'
-            )}>
-              {userRole === 'admin' ? 'Administrador' : userRole === 'caixa' ? 'Caixa' : userRole === 'estoque' ? 'Estoque' : 'Vendedor'}
-            </span>
+            <button
+              onClick={() => setUserRole(userRole === 'admin' ? 'vendedor' : 'admin')}
+              className={cn(
+                'inline-flex items-center justify-between w-full px-2.5 py-1 rounded-md text-xs font-bold transition-all',
+                userRole === 'admin' ? 'bg-primary text-white hover:opacity-90' : 'bg-white/10 text-white/70 hover:bg-white/20'
+              )}
+              title="Clique para alternar entre Administrador e Vendedor"
+            >
+              <span>{userRole === 'admin' ? 'Administrador' : userRole === 'caixa' ? 'Caixa' : userRole === 'estoque' ? 'Estoque' : 'Vendedor'}</span>
+              <span className="text-[10px] font-normal underline opacity-80">Mudar</span>
+            </button>
           </div>
         </div>
       )}
@@ -184,11 +188,24 @@ export default function Layout({ children }: LayoutProps) {
             <div className="flex items-center gap-3">
               <div className="text-right hidden sm:block">
                 <p className="text-sm font-semibold">{nome || 'Usuário'}</p>
-                <p className="text-xs text-muted-foreground capitalize">{userRole}</p>
+                <button
+                  onClick={() => setUserRole(userRole === 'admin' ? 'vendedor' : 'admin')}
+                  className="text-xs text-muted-foreground capitalize hover:underline hover:text-primary flex items-center gap-1 justify-end ml-auto"
+                  title="Clique para alternar perfil entre Administrador e Vendedor"
+                >
+                  <span className={userRole === 'admin' ? 'font-bold text-primary' : ''}>
+                    {userRole === 'admin' ? 'Administrador' : 'Vendedor'}
+                  </span>
+                  <span className="text-[9px] px-1.5 py-0.5 rounded bg-primary/15 text-primary font-bold">Mudar</span>
+                </button>
               </div>
-              <div className="h-8 w-8 rounded-full bg-primary flex items-center justify-center">
+              <button
+                onClick={() => setUserRole(userRole === 'admin' ? 'vendedor' : 'admin')}
+                className="h-8 w-8 rounded-full bg-primary flex items-center justify-center hover:opacity-90 transition-opacity shadow-sm"
+                title="Clique para alternar perfil"
+              >
                 <span className="text-xs font-bold text-white">{initials}</span>
-              </div>
+              </button>
             </div>
           </header>
 

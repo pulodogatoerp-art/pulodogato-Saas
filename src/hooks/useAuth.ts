@@ -3,15 +3,18 @@ import { User, Session } from '@supabase/supabase-js';
 import { supabase } from '@/integrations/supabase/client';
 import type { Database } from '@/integrations/supabase/types';
 
+export type AppRole = 'admin' | 'vendedor' | 'caixa' | 'estoque';
+
 export interface AuthUser {
   user: User | null;
   session: Session | null;
-  role: 'admin' | 'vendedor' | 'caixa' | 'estoque' | null;
+  role: AppRole | null;
   nome: string;
   loading: boolean;
+  setUserRole: (newRole: AppRole) => void;
+  refreshUser: () => Promise<void>;
 }
 
-type AppRole = 'admin' | 'vendedor' | 'caixa' | 'estoque';
 type UserRoleRow = Pick<Database['public']['Tables']['user_roles']['Row'], 'role'>;
 
 const ROLE_PRIORITY: AppRole[] = ['admin', 'vendedor', 'caixa', 'estoque'];
@@ -24,60 +27,75 @@ function pickRole(rows: UserRoleRow[] | null | undefined): AppRole {
 const AuthContext = createContext<AuthUser | null>(null);
 
 async function loadUserData(userId: string): Promise<{ role: AppRole; nome: string }> {
-  const [roleRes, profileRes] = await Promise.all([
-    supabase.from('user_roles').select('role').eq('user_id', userId),
-    supabase.from('profiles').select('nome').eq('id', userId).maybeSingle(),
-  ]);
+  try {
+    const [roleRes, profileRes] = await Promise.all([
+      supabase.from('user_roles').select('role').eq('user_id', userId),
+      supabase.from('profiles').select('nome').eq('id', userId).maybeSingle(),
+    ]);
 
-  if (roleRes.error) console.error('Erro ao carregar perfil do usuário:', roleRes.error.message);
-  if (profileRes.error) console.error('Erro ao carregar nome do usuário:', profileRes.error.message);
-
-  return {
-    role: pickRole(roleRes.data),
-    nome: profileRes.data?.nome ?? '',
-  };
+    return {
+      role: pickRole(roleRes.data),
+      nome: profileRes.data?.nome ?? '',
+    };
+  } catch (err) {
+    console.error('Falha ao carregar perfil do usuário:', err);
+    return {
+      role: 'vendedor',
+      nome: '',
+    };
+  }
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [session, setSession] = useState<Session | null>(null);
-  const [role, setRole] = useState<'admin' | 'vendedor' | 'caixa' | 'estoque' | null>(null);
+  const [role, setRole] = useState<AppRole | null>(() => {
+    return (localStorage.getItem('pecafacil_active_role') as AppRole) || null;
+  });
   const [nome, setNome] = useState('');
   const [loading, setLoading] = useState(true);
   const requestIdRef = useRef(0);
-  const currentUserIdRef = useRef<string | null>(null);
+
+  const setUserRole = (newRole: AppRole) => {
+    setRole(newRole);
+    localStorage.setItem('pecafacil_active_role', newRole);
+    // Tenta atualizar no Supabase se houver usuário autenticado
+    if (user?.id) {
+      supabase.from('user_roles').upsert({ user_id: user.id, role: newRole } as any).then(() => {});
+    }
+  };
+
+  const applySession = async (nextSession: Session | null) => {
+    const requestId = ++requestIdRef.current;
+    setSession(nextSession);
+    setUser(nextSession?.user ?? null);
+
+    if (!nextSession?.user) {
+      setRole(null);
+      setNome('');
+      setLoading(false);
+      return;
+    }
+
+    setLoading(true);
+    const userData = await loadUserData(nextSession.user.id);
+    if (requestId !== requestIdRef.current) return;
+
+    const savedOverride = localStorage.getItem('pecafacil_active_role') as AppRole | null;
+    const finalRole = savedOverride || userData.role;
+
+    setRole(finalRole);
+    setNome(userData.nome || (nextSession.user.email ? nextSession.user.email.split('@')[0] : 'Usuário'));
+    setLoading(false);
+  };
+
+  const refreshUser = async () => {
+    const { data: { session: curSession } } = await supabase.auth.getSession();
+    await applySession(curSession);
+  };
 
   useEffect(() => {
     let cancelled = false;
-
-    const applySession = async (nextSession: Session | null) => {
-      const requestId = ++requestIdRef.current;
-      const prevUserId = currentUserIdRef.current;
-      const nextUserId = nextSession?.user?.id ?? null;
-      setSession(nextSession);
-      setUser(nextSession?.user ?? null);
-
-      if (!nextSession?.user) {
-        currentUserIdRef.current = null;
-        setRole(null);
-        setNome('');
-        setLoading(false);
-        return;
-      }
-
-      if (prevUserId === nextUserId) {
-        setLoading(false);
-        return;
-      }
-
-      currentUserIdRef.current = nextUserId;
-      setLoading(true);
-      const userData = await loadUserData(nextSession.user.id);
-      if (cancelled || requestId !== requestIdRef.current) return;
-      setRole(userData.role);
-      setNome(userData.nome);
-      setLoading(false);
-    };
 
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (!cancelled) {
@@ -86,8 +104,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      (event, nextSession) => {
-        if (event === 'INITIAL_SESSION') return;
+      (_event, nextSession) => {
         setTimeout(() => {
           if (!cancelled) void applySession(nextSession);
         }, 0);
@@ -102,7 +119,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   return createElement(
     AuthContext.Provider,
-    { value: { user, session, role, nome, loading } },
+    { value: { user, session, role, nome, loading, setUserRole, refreshUser } },
     children
   );
 }
