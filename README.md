@@ -1,4 +1,6 @@
-# Welcome to your Lovable project
+# pulodogato-Saas
+
+Sistema completo de gestão inteligente de autopeças, estoque FIFO, orçamentos, vendas e emissão fiscal de NF-e com DANFE.
 
 ## Project info
 
