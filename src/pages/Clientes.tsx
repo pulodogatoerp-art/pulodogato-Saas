@@ -251,20 +251,21 @@ export default function Clientes() {
         <div className="flex items-center justify-center py-16">
           <Loader2 className="animate-spin text-primary" size={28} />
         </div>
-      ) : !hasSearch ? (
+      ) : clientes.length === 0 ? (
+        <div className="rounded-xl border bg-card shadow-sm py-16 text-center">
+          <Users size={40} className="mx-auto mb-3 text-muted-foreground/30" />
+          <p className="font-semibold text-muted-foreground">Nenhum cliente cadastrado ainda</p>
+          <p className="text-sm text-muted-foreground/70 mt-1">Clique em "Novo Cliente" no topo para adicionar o primeiro</p>
+        </div>
+      ) : filtered.length === 0 ? (
         <div className="rounded-xl border bg-card shadow-sm py-16 text-center">
           <Search size={40} className="mx-auto mb-3 text-muted-foreground/30" />
-          <p className="font-semibold text-muted-foreground">Pesquise para visualizar os clientes</p>
-          <p className="text-sm text-muted-foreground/70 mt-1">Digite nome, CPF/CNPJ, telefone ou e-mail no campo acima</p>
+          <p className="font-semibold text-muted-foreground">Nenhum cliente encontrado</p>
+          <p className="text-sm text-muted-foreground/70 mt-1">Nenhum registro coincide com "{search}"</p>
         </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4 overflow-y-auto max-h-[calc(100vh-18rem)] pr-1">
-          {filtered.length === 0 ? (
-            <div className="col-span-full py-16 text-center">
-              <Users size={40} className="mx-auto mb-3 text-muted-foreground/30" />
-              <p className="font-semibold text-muted-foreground">Nenhum cliente encontrado</p>
-            </div>
-          ) : filtered.map(c => (
+          {filtered.map(c => (
             <div key={c.id} className="rounded-xl border bg-card shadow-sm p-5 hover:shadow-md transition-all hover:-translate-y-0.5">
               <div className="flex items-start justify-between mb-3">
                 <div className="h-10 w-10 rounded-xl bg-primary/10 flex items-center justify-center">

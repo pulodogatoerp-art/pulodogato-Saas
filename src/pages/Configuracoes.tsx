@@ -131,17 +131,15 @@ export default function Configuracoes() {
 
   const saveMutation = useMutation({
     mutationFn: async () => {
-      const promises = CONFIG_KEYS.map(key =>
-        (supabase as any)
-          .from('configuracoes')
-          .upsert(
-            { chave: key, valor: form[key] ?? '', updated_at: new Date().toISOString() },
-            { onConflict: 'chave' }
-          )
-      );
-      const results = await Promise.all(promises);
-      const err = results.find((r: any) => r.error);
-      if (err?.error) throw err.error;
+      const rows = CONFIG_KEYS.map(key => ({
+        chave: key,
+        valor: form[key] ?? '',
+        updated_at: new Date().toISOString(),
+      }));
+      const { error } = await (supabase as any)
+        .from('configuracoes')
+        .upsert(rows, { onConflict: 'chave' });
+      if (error) throw error;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['configuracoes'] });

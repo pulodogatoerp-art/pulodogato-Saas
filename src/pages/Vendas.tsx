@@ -117,22 +117,28 @@ export default function Vendas() {
   const handleAbrirEmissao = async (venda: VendaDB) => {
     setVendaParaEmitir(venda);
 
-    // Carrega dados do cliente se cadastrado
+    // Carrega dados do cliente se cadastrado por ID ou busca por nome
+    let cliData: any = null;
     if (venda.cliente_id) {
-      const { data: cli } = await supabase.from('clientes').select('*').eq('id', venda.cliente_id).single();
-      if (cli) {
-        setDestinatarioForm({
-          nome: cli.nome || venda.cliente_nome,
-          cpfCnpj: cli.cpf_cnpj || '',
-          endereco: cli.endereco || 'Logradouro principal',
-          bairro: 'Centro',
-          cidade: config?.['empresa_cidade'] || 'Campo Grande',
-          uf: config?.['empresa_uf'] || 'MS',
-          cep: '79000-000',
-          telefone: cli.telefone || '',
-        });
-        return;
-      }
+      const { data: cli } = await supabase.from('clientes').select('*').eq('id', venda.cliente_id).maybeSingle();
+      cliData = cli;
+    } else if (venda.cliente_nome && venda.cliente_nome !== 'Cliente Balcão') {
+      const { data: cli } = await supabase.from('clientes').select('*').ilike('nome', venda.cliente_nome).maybeSingle();
+      cliData = cli;
+    }
+
+    if (cliData) {
+      setDestinatarioForm({
+        nome: cliData.nome || venda.cliente_nome,
+        cpfCnpj: cliData.cpf_cnpj || '',
+        endereco: cliData.endereco || 'Logradouro principal',
+        bairro: 'Centro',
+        cidade: config?.['empresa_cidade'] || 'Campo Grande',
+        uf: config?.['empresa_uf'] || 'MS',
+        cep: '79000-000',
+        telefone: cliData.telefone || '',
+      });
+      return;
     }
 
     setDestinatarioForm({
