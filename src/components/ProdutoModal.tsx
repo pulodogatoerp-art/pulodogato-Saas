@@ -1,15 +1,20 @@
-import React, { useState, useMemo } from 'react';
-import { Plus, X, Loader2, Calculator, FileText, TrendingUp, TrendingDown, Copy, Save } from 'lucide-react';
+import React, { useState, useMemo, useRef } from 'react';
+import {
+  Plus, X, Loader2, Calculator, FileText, TrendingUp, TrendingDown,
+  Copy, Save, Upload, Link as LinkIcon, Image as ImageIcon, Sparkles, CheckCircle2, Trash2
+} from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { toast } from '@/hooks/use-toast';
 import { useAuth } from '@/hooks/useAuth';
+import { supabase } from '@/integrations/supabase/client';
+import { compressImageToWebP, formatFileSize } from '@/lib/image-compress';
 
 const categoriasDefault = ['Filtros', 'Freios', 'Suspensão', 'Motor', 'Arrefecimento'];
 const tiposVeiculo = ['Carro', 'Moto', 'Pesado', 'Agrícola'];
 
 export interface ProdutoModalData {
   id?: string;
-  codigo: string;
+  codigo?: string;
   codigo_fabrica: string;
   codigo_interno?: string;
   nome: string;
@@ -27,6 +32,9 @@ export interface ProdutoModalData {
   cofins_percentual: number;
   preco_custo?: number;
   frete_custo?: number;
+  imagem_url?: string | null;
+  imagens?: string[] | null;
+  localizacao?: string | null;
 }
 
 export interface ProdutoModalProps {
@@ -63,9 +71,20 @@ export interface SimulacaoCustoSnapshot {
   markup_real: number;
 }
 
-export default function ProdutoModal({ produto, onClose, onSave, saving, markupPadrao = '30', customCategorias = [], onSaveSimulacao, orcamentoLabel }: ProdutoModalProps) {
+export default function ProdutoModal({
+  produto,
+  onClose,
+  onSave,
+  saving,
+  markupPadrao = '30',
+  customCategorias = [],
+  onSaveSimulacao,
+  orcamentoLabel
+}: ProdutoModalProps) {
   const { role } = useAuth();
   const isAdmin = role === 'admin';
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
   const allCategorias = useMemo(() => {
     const merged = new Set([...categoriasDefault, ...customCategorias]);
     return Array.from(merged).sort();
@@ -75,6 +94,21 @@ export default function ProdutoModal({ produto, onClose, onSave, saving, markupP
   const [newCat, setNewCat] = useState('');
   const [tab, setTab] = useState<'cadastro' | 'calculo'>('cadastro');
   const [simPrecoVenda, setSimPrecoVenda] = useState('');
+
+  // Imagens do produto (até 3 imagens)
+  const [imagens, setImagens] = useState<string[]>(() => {
+    if (produto?.imagens && Array.isArray(produto.imagens) && produto.imagens.length > 0) {
+      return produto.imagens.slice(0, 3);
+    }
+    if (produto?.imagem_url) {
+      return [produto.imagem_url];
+    }
+    return [];
+  });
+  const [linkInput, setLinkInput] = useState('');
+  const [showLinkInput, setShowLinkInput] = useState(false);
+  const [uploadingImage, setUploadingImage] = useState(false);
+  const [compressionInfo, setCompressionInfo] = useState<string | null>(null);
 
   const [form, setForm] = useState({
     nome: produto?.nome || '',
@@ -89,6 +123,7 @@ export default function ProdutoModal({ produto, onClose, onSave, saving, markupP
     categoria: produto?.categoria || categoriasDefault[0],
     codigoFabrica: produto?.codigo_fabrica || '',
     tipoVeiculo: produto?.tipo_veiculo || 'Carro',
+    localizacao: produto?.localizacao || 'Corredor A-Prateleira 01-G-01',
     icms: produto?.icms_percentual?.toString() || '',
     ipi: produto?.ipi_percentual?.toString() || '',
     pis: produto?.pis_percentual?.toString() || '',
@@ -133,6 +168,85 @@ export default function ProdutoModal({ produto, onClose, onSave, saving, markupP
     });
   };
 
+  // Upload com Compressão Inteligente para WebP
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (imagens.length >= 3) {
+      toast({ title: 'Limite de 3 imagens atingido', variant: 'destructive' });
+      return;
+    }
+
+    setUploadingImage(true);
+    setCompressionInfo('Comprimindo e convertendo para WebP (máx 1024px)...');
+    try {
+      // 1. Compressão inteligente no navegador (descarta EXIF/GPS, redimensiona para máx 1024px e converte para WebP)
+      const compressed = await compressImageToWebP(file, 1024, 0.82);
+
+      // 2. Upload para o Supabase Storage no bucket produtos-imagens
+      const fileExt = 'webp';
+      const fileName = `${Date.now()}-${Math.random().toString(36).substring(2, 9)}.${fileExt}`;
+      const filePath = `itens/${fileName}`;
+
+      const { data: uploadData, error: uploadErr } = await supabase.storage
+        .from('produtos-imagens')
+        .upload(filePath, compressed.blob, {
+          contentType: 'image/webp',
+          upsert: true,
+        });
+
+      if (uploadErr) throw uploadErr;
+
+      // 3. Obter URL pública
+      const { data: publicUrlData } = supabase.storage
+        .from('produtos-imagens')
+        .getPublicUrl(filePath);
+
+      const url = publicUrlData.publicUrl;
+      setImagens(prev => [...prev, url].slice(0, 3));
+
+      const stats = `Reduzido de ${formatFileSize(compressed.originalSize)} para ${formatFileSize(compressed.compressedSize)} (-${compressed.reductionPct}%)`;
+      setCompressionInfo(stats);
+      toast({
+        title: 'Imagem compactada com sucesso!',
+        description: stats,
+      });
+    } catch (err: any) {
+      console.error('Erro na compressão/upload:', err);
+      toast({
+        title: 'Erro ao processar imagem',
+        description: err.message || 'Tente novamente com outro arquivo.',
+        variant: 'destructive',
+      });
+      setCompressionInfo(null);
+    } finally {
+      setUploadingImage(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
+  // Adicionar Link Externo de Imagem
+  const handleAddLink = () => {
+    const url = linkInput.trim();
+    if (!url) return;
+    if (!url.startsWith('http://') && !url.startsWith('https://')) {
+      toast({ title: 'Insira uma URL válida (iniciando com https://)', variant: 'destructive' });
+      return;
+    }
+    if (imagens.length >= 3) {
+      toast({ title: 'Limite de 3 imagens atingido', variant: 'destructive' });
+      return;
+    }
+    setImagens(prev => [...prev, url].slice(0, 3));
+    setLinkInput('');
+    setShowLinkInput(false);
+    toast({ title: 'Link de imagem adicionado!' });
+  };
+
+  const handleRemoveImage = (index: number) => {
+    setImagens(prev => prev.filter((_, i) => i !== index));
+  };
+
   const handleSubmit = () => {
     if (!form.nome.trim()) {
       toast({ title: 'Preencha o nome do produto', variant: 'destructive' });
@@ -141,6 +255,7 @@ export default function ProdutoModal({ produto, onClose, onSave, saving, markupP
     const precoCustoNum = parseFloat(form.precoCusto) || 0;
     const freteCustoNum = parseFloat(form.freteCusto) || 0;
     const custoTotal = precoCustoNum + freteCustoNum;
+
     onSave({
       codigo_fabrica: form.codigoFabrica.trim(),
       nome: form.nome.trim(),
@@ -152,12 +267,15 @@ export default function ProdutoModal({ produto, onClose, onSave, saving, markupP
       estoque_minimo: parseInt(form.estoqueMinimo) || 0,
       categoria: form.categoria,
       tipo_veiculo: form.tipoVeiculo,
+      localizacao: form.localizacao.trim() || 'Corredor A-Prateleira 01-G-01',
       icms_percentual: parseFloat(form.icms) || 0,
       ipi_percentual: parseFloat(form.ipi) || 0,
       pis_percentual: parseFloat(form.pis) || 0,
       cofins_percentual: parseFloat(form.cofins) || 0,
       preco_custo: precoCustoNum,
       frete_custo: freteCustoNum,
+      imagens: imagens,
+      imagem_url: imagens[0] || null, // Primeira imagem é a capa/principal
       _lote: {
         fornecedor: form.fornecedor.trim(),
         preco_custo: custoTotal,
@@ -166,7 +284,7 @@ export default function ProdutoModal({ produto, onClose, onSave, saving, markupP
     });
   };
 
-  const inputClass = "w-full rounded-lg border px-3 py-2.5 text-sm bg-background focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary transition-all";
+  const inputClass = "w-full rounded-lg border px-3 py-2 text-xs sm:text-sm bg-background focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary transition-all";
 
   const calc = useMemo(() => {
     const custoBase = parseFloat(form.precoCusto) || 0;
@@ -200,151 +318,265 @@ export default function ProdutoModal({ produto, onClose, onSave, saving, markupP
       `Frete: ${fmt(parseFloat(form.freteCusto) || 0)}`,
       `Custo total: ${fmt(calc.custo)}`,
       `Markup: ${(parseFloat(form.markup) || 0).toFixed(2)}%`,
-      `Impostos (ICMS ${form.icms || 0}% + IPI ${form.ipi || 0}% + PIS ${form.pis || 0}% + COFINS ${form.cofins || 0}% = ${calc.totalImpostosPct.toFixed(2)}%): ${fmt(calc.impostosValor)}`,
+      `Impostos: ${fmt(calc.impostosValor)}`,
       `Preço sugerido: ${fmt(calc.precoSugerido)}`,
       `Preço negociado: ${fmt(calc.precoNegociado)}`,
       `Lucro bruto: ${fmt(calc.lucroBruto)} (${calc.margemBruta.toFixed(2)}%)`,
       `Lucro líquido: ${fmt(calc.lucroLiquido)} (${calc.margemLiquida.toFixed(2)}%)`,
-      `Markup real: ${calc.markupReal.toFixed(2)}%`,
     ];
     const texto = linhas.join('\n');
     try {
       await navigator.clipboard.writeText(texto);
-      toast({ title: 'Resumo copiado', description: 'Cole na observação do orçamento.' });
+      toast({ title: 'Resumo copiado com sucesso!' });
     } catch {
-      toast({ title: 'Não foi possível copiar', description: 'Copie manualmente do console.', variant: 'destructive' });
-      console.log(texto);
+      toast({ title: 'Erro ao copiar', variant: 'destructive' });
     }
   };
-
-  const buildSnapshot = (): SimulacaoCustoSnapshot => ({
-    id: (typeof crypto !== 'undefined' && 'randomUUID' in crypto) ? crypto.randomUUID() : `sim-${Date.now()}`,
-    produto_nome: form.nome.trim() || 'Produto sem nome',
-    data: new Date().toISOString(),
-    preco_custo: parseFloat(form.precoCusto) || 0,
-    frete_custo: parseFloat(form.freteCusto) || 0,
-    custo_total: calc.custo,
-    markup: parseFloat(form.markup) || 0,
-    icms: parseFloat(form.icms) || 0,
-    ipi: parseFloat(form.ipi) || 0,
-    pis: parseFloat(form.pis) || 0,
-    cofins: parseFloat(form.cofins) || 0,
-    total_impostos_pct: calc.totalImpostosPct,
-    impostos_valor: calc.impostosValor,
-    preco_sugerido: calc.precoSugerido,
-    preco_negociado: calc.precoNegociado,
-    lucro_bruto: calc.lucroBruto,
-    lucro_liquido: calc.lucroLiquido,
-    margem_bruta: calc.margemBruta,
-    margem_liquida: calc.margemLiquida,
-    markup_real: calc.markupReal,
-  });
 
   const handleSalvarSimulacao = () => {
     if (!onSaveSimulacao) return;
-    if (calc.custo <= 0) {
-      toast({ title: 'Informe ao menos o custo', variant: 'destructive' });
-      return;
-    }
-    onSaveSimulacao(buildSnapshot());
-    toast({ title: 'Simulação salva no orçamento', description: 'Ficará registrada mesmo que o produto seja alterado depois.' });
+    const snap: SimulacaoCustoSnapshot = {
+      id: `sim-${Date.now()}`,
+      produto_nome: form.nome.trim() || 'Produto sem nome',
+      data: new Date().toISOString(),
+      preco_custo: parseFloat(form.precoCusto) || 0,
+      frete_custo: parseFloat(form.freteCusto) || 0,
+      custo_total: calc.custo,
+      markup: parseFloat(form.markup) || 0,
+      icms: parseFloat(form.icms) || 0,
+      ipi: parseFloat(form.ipi) || 0,
+      pis: parseFloat(form.pis) || 0,
+      cofins: parseFloat(form.cofins) || 0,
+      total_impostos_pct: calc.totalImpostosPct,
+      impostos_valor: calc.impostosValor,
+      preco_sugerido: calc.precoSugerido,
+      preco_negociado: calc.precoNegociado,
+      lucro_bruto: calc.lucroBruto,
+      lucro_liquido: calc.lucroLiquido,
+      margem_bruta: calc.margemBruta,
+      margem_liquida: calc.margemLiquida,
+      markup_real: calc.markupReal,
+    };
+    onSaveSimulacao(snap);
+    toast({ title: 'Simulação vinculada ao orçamento!' });
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
-      <div className="relative bg-background rounded-2xl shadow-lg w-full max-w-lg animate-fade-in max-h-[90vh] flex flex-col">
-        <div className="flex items-center justify-between px-6 py-4 border-b shrink-0">
-          <h2 className="font-bold text-lg">{produto ? 'Editar Produto' : 'Novo Produto'}</h2>
-          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-muted transition-colors">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-fade-in">
+      <div className="relative bg-background rounded-2xl shadow-xl w-full max-w-2xl border overflow-hidden flex flex-col max-h-[90vh]">
+        {/* Header com Abas */}
+        <div className="flex items-center justify-between px-6 py-3.5 border-b bg-muted/20">
+          <div className="flex items-center gap-3">
+            <h2 className="font-bold text-base">{produto ? 'Editar Produto' : 'Cadastrar Nova Peça'}</h2>
+            <div className="flex rounded-lg border bg-background p-0.5 text-xs font-semibold">
+              <button
+                type="button"
+                onClick={() => setTab('cadastro')}
+                className={cn('px-2.5 py-1 rounded-md transition-colors', tab === 'cadastro' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground')}
+              >
+                Dados da Peça
+              </button>
+              <button
+                type="button"
+                onClick={() => setTab('calculo')}
+                className={cn('px-2.5 py-1 rounded-md transition-colors flex items-center gap-1', tab === 'calculo' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground')}
+              >
+                <Calculator size={12} /> Cálculo & Margem
+              </button>
+            </div>
+          </div>
+          <button onClick={onClose} className="p-1 rounded-lg hover:bg-muted text-muted-foreground">
             <X size={18} />
           </button>
         </div>
-        <div className="flex gap-1 px-6 pt-3 border-b shrink-0">
-          <button
-            type="button"
-            onClick={() => setTab('cadastro')}
-            className={cn('px-3 py-2 text-sm font-semibold border-b-2 transition-colors flex items-center gap-1.5', tab === 'cadastro' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground')}
-          >
-            <FileText size={14} /> Cadastro
-          </button>
-          <button
-            type="button"
-            onClick={() => setTab('calculo')}
-            className={cn('px-3 py-2 text-sm font-semibold border-b-2 transition-colors flex items-center gap-1.5', tab === 'calculo' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground')}
-          >
-            <Calculator size={14} /> Cálculo de Custo
-          </button>
-        </div>
+
         {tab === 'cadastro' && (
-        <div className="px-6 py-5 grid grid-cols-2 gap-4 overflow-y-auto flex-1">
-          {produto?.codigo_interno && (
-            <div className="col-span-2">
-              <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1.5">
-                Código Interno (gerado automaticamente)
-              </label>
-              <input
-                value={produto.codigo_interno}
-                disabled
-                className={cn(inputClass, 'bg-muted font-mono font-semibold text-primary')}
-              />
-            </div>
-          )}
-          {[
-            { label: 'Código Fábrica', name: 'codigoFabrica', col: 1 },
-            { label: 'Categoria', name: 'categoria', col: 1, select: allCategorias, addNew: true },
-            { label: 'Tipo Veículo', name: 'tipoVeiculo', col: 1, select: tiposVeiculo },
-            { label: 'Nome do Produto', name: 'nome', col: 2 },
-            { label: 'Marca', name: 'marca', col: 1 },
-            { label: 'Fornecedor', name: 'fornecedor', col: 1 },
-            { label: 'Aplicação (Veículo)', name: 'aplicacao', col: 2 },
-            { label: 'NCM', name: 'ncm', col: 1 },
-            { label: 'Preço de Custo (R$)', name: 'precoCusto', col: 1 },
-            { label: 'Frete no Custo (R$)', name: 'freteCusto', col: 1 },
-            { label: 'Quantidade Inicial', name: 'quantidadeInicial', col: 1 },
-            { label: 'Markup (%)', name: 'markup', col: 1 },
-            { label: 'ICMS (%)', name: 'icms', col: 1 },
-            { label: 'IPI (%)', name: 'ipi', col: 1 },
-            { label: 'PIS (%)', name: 'pis', col: 1 },
-            { label: 'COFINS (%)', name: 'cofins', col: 1 },
-            { label: 'Preço de Venda (R$)', name: 'precoVenda', col: 1, disabled: true },
-            { label: 'Estoque Mínimo', name: 'estoqueMinimo', col: 1 },
-          ].map(({ label, name, col, select, disabled, addNew }) => (
-            <div key={name} className={col === 2 ? 'col-span-2' : ''}>
-              <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1.5">
-                {label}
-              </label>
-              {select ? (
-                <div className="flex gap-1.5">
-                  <select
-                    name={name}
-                    value={(form as any)[name]}
-                    onChange={handleChange}
-                    className={cn(inputClass, 'flex-1')}
-                  >
-                    {select.map(o => <option key={o}>{o}</option>)}
-                  </select>
-                  {addNew && !showNewCat && (
+          <div className="px-6 py-5 grid grid-cols-2 gap-3.5 overflow-y-auto flex-1">
+            {/* SEÇÃO: IMAGENS DA PEÇA (ATÉ 3 IMAGENS + COMPRESSÃO INTELIGENTE) */}
+            <div className="col-span-2 rounded-xl border bg-muted/20 p-3.5 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <ImageIcon size={16} className="text-primary" />
+                  <span className="text-xs font-bold uppercase tracking-wider text-foreground">
+                    Fotos do Produto ({imagens.length}/3)
+                  </span>
+                  <span className="text-[10px] font-semibold text-emerald-600 bg-emerald-500/15 px-2 py-0.5 rounded-full flex items-center gap-1">
+                    <Sparkles size={11} /> WebP -95%
+                  </span>
+                </div>
+                <span className="text-[11px] text-muted-foreground">
+                  Primeira foto será a capa
+                </span>
+              </div>
+
+              {/* Thumbnails list */}
+              <div className="grid grid-cols-3 gap-2.5">
+                {imagens.map((img, idx) => (
+                  <div key={idx} className="relative rounded-lg border bg-white h-24 overflow-hidden group shadow-sm flex items-center justify-center">
+                    <img src={img} alt={`Foto ${idx + 1}`} className="max-h-full max-w-full object-contain" />
+                    <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveImage(idx)}
+                        className="p-1.5 rounded-full bg-red-600 text-white hover:bg-red-700 transition-colors shadow"
+                        title="Remover imagem"
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
+                    {idx === 0 && (
+                      <span className="absolute bottom-1 left-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-primary text-primary-foreground shadow">
+                        Capa
+                      </span>
+                    )}
+                  </div>
+                ))}
+
+                {/* Slot para adicionar mais imagens */}
+                {imagens.length < 3 && (
+                  <div className="h-24 rounded-lg border border-dashed border-primary/40 bg-primary/5 flex flex-col items-center justify-center p-2 text-center gap-1.5">
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      id="peca-file-upload"
+                      disabled={uploadingImage}
+                      onChange={handleFileChange}
+                    />
+                    <label
+                      htmlFor="peca-file-upload"
+                      className="cursor-pointer text-[11px] font-bold text-primary hover:underline flex items-center gap-1"
+                    >
+                      {uploadingImage ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}
+                      {uploadingImage ? 'Comprimindo...' : 'Enviar Foto'}
+                    </label>
                     <button
                       type="button"
-                      onClick={() => setShowNewCat(true)}
-                      className="px-2 rounded-lg border hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
-                      title="Adicionar categoria"
+                      onClick={() => setShowLinkInput(v => !v)}
+                      className="text-[10px] text-muted-foreground hover:text-foreground flex items-center gap-1"
                     >
-                      <Plus size={14} />
+                      <LinkIcon size={10} /> Colar Link
                     </button>
-                  )}
+                  </div>
+                )}
+              </div>
+
+              {/* Input para Colar URL da Imagem */}
+              {showLinkInput && imagens.length < 3 && (
+                <div className="flex items-center gap-2 pt-1 animate-fade-in">
+                  <input
+                    type="url"
+                    placeholder="https://exemplo.com/foto-peca.jpg"
+                    value={linkInput}
+                    onChange={e => setLinkInput(e.target.value)}
+                    className="flex-1 rounded-lg border bg-background px-3 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-primary"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleAddLink}
+                    disabled={!linkInput.trim()}
+                    className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-primary text-primary-foreground hover:bg-primary/90"
+                  >
+                    Adicionar
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setShowLinkInput(false); setLinkInput(''); }}
+                    className="p-1 text-muted-foreground hover:text-foreground"
+                  >
+                    <X size={14} />
+                  </button>
                 </div>
-              ) : (
-                <input
-                  name={name}
-                  value={(form as any)[name]}
-                  onChange={handleChange}
-                  disabled={!!disabled}
-                  className={cn(inputClass, disabled && 'bg-muted font-semibold text-primary')}
-                />
               )}
-              {addNew && showNewCat && (
+
+              {compressionInfo && (
+                <p className="text-[11px] text-emerald-600 flex items-center gap-1 font-medium">
+                  <CheckCircle2 size={12} /> {compressionInfo}
+                </p>
+              )}
+            </div>
+
+            {/* Código Interno (se editando) */}
+            {produto?.codigo_interno && (
+              <div className="col-span-2">
+                <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">
+                  Código Interno
+                </label>
+                <input
+                  value={produto.codigo_interno}
+                  disabled
+                  className={cn(inputClass, 'bg-muted font-mono font-bold text-primary')}
+                />
+              </div>
+            )}
+
+            {/* Campos Principais */}
+            <div>
+              <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">
+                Código de Fábrica / Ref.
+              </label>
+              <input
+                name="codigoFabrica"
+                value={form.codigoFabrica}
+                onChange={handleChange}
+                placeholder="Ex: SE 32760"
+                className={inputClass}
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">
+                Marca da Peça
+              </label>
+              <input
+                name="marca"
+                value={form.marca}
+                onChange={handleChange}
+                placeholder="Ex: NAKATA, COBREQ, BOSCH"
+                className={inputClass}
+              />
+            </div>
+
+            <div className="col-span-2">
+              <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">
+                Nome / Descrição da Peça <span className="text-red-500">*</span>
+              </label>
+              <input
+                name="nome"
+                value={form.nome}
+                onChange={handleChange}
+                placeholder="Ex: AMORTECEDOR SUSPENSÃO DIANTEIRO"
+                className={inputClass}
+                required
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">
+                Categoria / Grupo
+              </label>
+              <div className="flex gap-1.5">
+                <select
+                  name="categoria"
+                  value={form.categoria}
+                  onChange={handleChange}
+                  className={cn(inputClass, 'flex-1')}
+                >
+                  {allCategorias.map(c => <option key={c}>{c}</option>)}
+                </select>
+                {!showNewCat && (
+                  <button
+                    type="button"
+                    onClick={() => setShowNewCat(true)}
+                    className="px-2 rounded-lg border hover:bg-muted text-muted-foreground"
+                    title="Nova categoria"
+                  >
+                    <Plus size={14} />
+                  </button>
+                )}
+              </div>
+              {showNewCat && (
                 <div className="flex gap-1.5 mt-1.5">
                   <input
                     value={newCat}
@@ -352,20 +584,152 @@ export default function ProdutoModal({ produto, onClose, onSave, saving, markupP
                     placeholder="Nova categoria..."
                     className={cn(inputClass, 'flex-1')}
                     onKeyDown={e => e.key === 'Enter' && handleAddCategory()}
-                    autoFocus
                   />
-                  <button type="button" onClick={handleAddCategory} className="px-2.5 py-1.5 rounded-lg text-xs font-semibold text-white" style={{ background: 'hsl(var(--primary))' }}>OK</button>
-                  <button type="button" onClick={() => { setShowNewCat(false); setNewCat(''); }} className="px-2 py-1.5 rounded-lg border text-xs hover:bg-muted"><X size={12} /></button>
+                  <button type="button" onClick={handleAddCategory} className="px-2.5 py-1 text-xs font-bold text-white rounded-lg bg-primary">OK</button>
+                  <button type="button" onClick={() => setShowNewCat(false)} className="px-2 rounded-lg border text-xs"><X size={12} /></button>
                 </div>
               )}
             </div>
-          ))}
-        </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">
+                Tipo de Veículo
+              </label>
+              <select
+                name="tipoVeiculo"
+                value={form.tipoVeiculo}
+                onChange={handleChange}
+                className={inputClass}
+              >
+                {tiposVeiculo.map(t => <option key={t}>{t}</option>)}
+              </select>
+            </div>
+
+            <div className="col-span-2">
+              <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">
+                Aplicação / Modelos Compatíveis
+              </label>
+              <input
+                name="aplicacao"
+                value={form.aplicacao}
+                onChange={handleChange}
+                placeholder="Ex: FIAT UNO 1985 A 2013 3P/5P"
+                className={inputClass}
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">
+                Localização (Prateleira / Gaveta)
+              </label>
+              <input
+                name="localizacao"
+                value={form.localizacao}
+                onChange={handleChange}
+                placeholder="Ex: Corredor A-Prateleira 01-G-01"
+                className={inputClass}
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">
+                NCM
+              </label>
+              <input
+                name="ncm"
+                value={form.ncm}
+                onChange={handleChange}
+                placeholder="Ex: 8708.80.00"
+                className={inputClass}
+              />
+            </div>
+
+            {/* Preços e Estoque */}
+            <div>
+              <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">
+                Preço de Custo (R$)
+              </label>
+              <input
+                name="precoCusto"
+                value={form.precoCusto}
+                onChange={handleChange}
+                placeholder="0,00"
+                className={inputClass}
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">
+                Markup Padrão (%)
+              </label>
+              <input
+                name="markup"
+                value={form.markup}
+                onChange={handleChange}
+                className={inputClass}
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">
+                Preço de Venda (R$)
+              </label>
+              <input
+                name="precoVenda"
+                value={form.precoVenda}
+                onChange={handleChange}
+                className={cn(inputClass, 'font-bold text-primary')}
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">
+                Estoque Mínimo
+              </label>
+              <input
+                name="estoqueMinimo"
+                type="number"
+                value={form.estoqueMinimo}
+                onChange={handleChange}
+                placeholder="1"
+                className={inputClass}
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">
+                Qtd Inicial em Estoque
+              </label>
+              <input
+                name="quantidadeInicial"
+                type="number"
+                value={form.quantidadeInicial}
+                onChange={handleChange}
+                placeholder="0"
+                className={inputClass}
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">
+                Fornecedor Inicial
+              </label>
+              <input
+                name="fornecedor"
+                value={form.fornecedor}
+                onChange={handleChange}
+                placeholder="Ex: Distribuidora DPK"
+                className={inputClass}
+              />
+            </div>
+          </div>
         )}
+
+        {/* Tab de Cálculo & Margem */}
         {tab === 'calculo' && (
           <div className="px-6 py-5 overflow-y-auto flex-1 space-y-4">
             <p className="text-xs text-muted-foreground">
-              Simule o lucro real antes de adicionar o produto ao estoque. Os valores vêm do cadastro — ajuste para ver o impacto.
+              Simule a margem e o lucro real antes de salvar. Os valores de impostos e frete são calculados instantaneamente.
             </p>
             <div className="grid grid-cols-2 gap-3">
               {[
@@ -378,12 +742,12 @@ export default function ProdutoModal({ produto, onClose, onSave, saving, markupP
                 { label: 'COFINS (%)', name: 'cofins' },
               ].map(({ label, name }) => (
                 <div key={name}>
-                  <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1.5">{label}</label>
+                  <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">{label}</label>
                   <input name={name} value={(form as any)[name]} onChange={handleChange} className={inputClass} />
                 </div>
               ))}
               <div className="col-span-2">
-                <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1.5">Preço de Venda Negociado (R$)</label>
+                <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">Preço de Venda Negociado (R$)</label>
                 <input
                   value={simPrecoVenda}
                   onChange={e => setSimPrecoVenda(e.target.value)}
@@ -394,7 +758,7 @@ export default function ProdutoModal({ produto, onClose, onSave, saving, markupP
               </div>
             </div>
             <div className="rounded-xl border bg-muted/30 p-4 space-y-2">
-              <div className="flex justify-between text-sm"><span className="text-muted-foreground">Custo total (com frete)</span><span className="font-semibold">{fmt(calc.custo)}</span></div>
+              <div className="flex justify-between text-sm"><span className="text-muted-foreground">Custo total</span><span className="font-semibold">{fmt(calc.custo)}</span></div>
               <div className="flex justify-between text-sm"><span className="text-muted-foreground">Impostos ({calc.totalImpostosPct.toFixed(2)}%)</span><span className="font-semibold">{fmt(calc.impostosValor)}</span></div>
               <div className="flex justify-between text-sm"><span className="text-muted-foreground">Preço negociado</span><span className="font-semibold">{fmt(calc.precoNegociado)}</span></div>
               <div className="h-px bg-border my-1" />
@@ -411,42 +775,31 @@ export default function ProdutoModal({ produto, onClose, onSave, saving, markupP
                   {fmt(calc.lucroLiquido)}
                 </span>
               </div>
-              <div className="flex justify-between text-xs text-muted-foreground">
-                <span>Margem líquida</span>
-                <span>{calc.margemLiquida.toFixed(2)}% · Markup real {calc.markupReal.toFixed(2)}%</span>
-              </div>
             </div>
             {isAdmin && (
               <button
                 type="button"
                 onClick={handleCopyResumo}
-                className="w-full rounded-lg border px-4 py-2.5 text-sm font-semibold hover:bg-muted transition-colors flex items-center justify-center gap-2"
+                className="w-full rounded-lg border px-4 py-2 text-xs font-semibold hover:bg-muted transition-colors flex items-center justify-center gap-2"
               >
-                <Copy size={14} /> Copiar resumo para o orçamento
-              </button>
-            )}
-            {isAdmin && onSaveSimulacao && (
-              <button
-                type="button"
-                onClick={handleSalvarSimulacao}
-                className="w-full rounded-lg px-4 py-2.5 text-sm font-semibold text-primary-foreground bg-primary hover:opacity-90 transition-opacity flex items-center justify-center gap-2"
-              >
-                <Save size={14} /> Salvar simulação no orçamento{orcamentoLabel ? ` (${orcamentoLabel})` : ''}
+                <Copy size={13} /> Copiar resumo
               </button>
             )}
           </div>
         )}
-        <div className="flex gap-3 px-6 py-4 border-t">
-          <button onClick={onClose} className="flex-1 rounded-lg border px-4 py-2.5 text-sm font-medium hover:bg-muted transition-colors">
+
+        {/* Footer */}
+        <div className="flex gap-3 px-6 py-3.5 border-t bg-muted/10">
+          <button onClick={onClose} className="flex-1 rounded-xl border px-4 py-2 text-xs font-semibold hover:bg-muted transition-colors">
             Cancelar
           </button>
           <button
             onClick={handleSubmit}
-            disabled={saving}
-            className="flex-1 rounded-lg px-4 py-2.5 text-sm font-semibold text-white transition-all hover:opacity-90 active:scale-95 disabled:opacity-50"
+            disabled={saving || uploadingImage}
+            className="flex-1 rounded-xl px-4 py-2 text-xs font-bold text-white transition-all hover:opacity-95 active:scale-98 disabled:opacity-50 flex items-center justify-center gap-2"
             style={{ background: 'hsl(var(--primary))' }}
           >
-            {saving ? <Loader2 size={16} className="animate-spin mx-auto" /> : produto ? 'Salvar Alterações' : 'Cadastrar Produto'}
+            {saving ? <Loader2 size={15} className="animate-spin" /> : produto ? 'Salvar Alterações' : 'Cadastrar Peça'}
           </button>
         </div>
       </div>

@@ -96,7 +96,13 @@ export default function Produtos() {
 
   // Produto Selecionado para visualização no Card Lateral
   const [selectedProduto, setSelectedProduto] = useState<ProdutoDB | null>(null);
+  const [activeImgIdx, setActiveImgIdx] = useState<number>(0);
   const [cardQtd, setCardQtd] = useState<number>(1);
+
+  // Reseta índice da imagem ao trocar de produto
+  useEffect(() => {
+    setActiveImgIdx(0);
+  }, [selectedProduto?.id]);
 
   // Carrinho de Venda / DAV
   const [carrinho, setCarrinho] = useState<CartItem[]>(() => {
@@ -596,30 +602,66 @@ export default function Produtos() {
 
         {/* Right Column: Visual Product Preview Card (Exact Match with user reference image) */}
         <div className="lg:col-span-4 sticky top-4">
-          {selectedProduto ? (
-            <div className="rounded-2xl border bg-card shadow-sm p-5 space-y-4">
-              {/* Product Photo Box */}
-              <div className="w-full h-56 rounded-xl border bg-white flex items-center justify-center p-3 overflow-hidden shadow-inner relative group">
-                {selectedProduto.imagem_url ? (
-                  <img
-                    src={selectedProduto.imagem_url}
-                    alt={selectedProduto.nome}
-                    className="max-h-full max-w-full object-contain transition-transform duration-300 group-hover:scale-105"
-                  />
-                ) : (
-                  <div className="flex flex-col items-center justify-center text-muted-foreground/40 gap-2">
-                    <Package size={56} strokeWidth={1.2} />
-                    <span className="text-[11px] uppercase tracking-wider font-semibold text-muted-foreground/60">
-                      Foto da Peça
-                    </span>
+          {selectedProduto ? (() => {
+            const itemImgs = selectedProduto.imagens && selectedProduto.imagens.length > 0
+              ? selectedProduto.imagens
+              : selectedProduto.imagem_url
+                ? [selectedProduto.imagem_url]
+                : [];
+            const activeImgUrl = itemImgs[activeImgIdx] || selectedProduto.imagem_url;
+
+            return (
+              <div className="rounded-2xl border bg-card shadow-sm p-5 space-y-4">
+                {/* Product Photo Box */}
+                <div className="space-y-2">
+                  <div className="w-full h-56 rounded-xl border bg-white flex items-center justify-center p-3 overflow-hidden shadow-inner relative group">
+                    {activeImgUrl ? (
+                      <img
+                        src={activeImgUrl}
+                        alt={selectedProduto.nome}
+                        className="max-h-full max-w-full object-contain transition-transform duration-300 group-hover:scale-105"
+                      />
+                    ) : (
+                      <div className="flex flex-col items-center justify-center text-muted-foreground/40 gap-2">
+                        <Package size={56} strokeWidth={1.2} />
+                        <span className="text-[11px] uppercase tracking-wider font-semibold text-muted-foreground/60">
+                          Foto da Peça
+                        </span>
+                      </div>
+                    )}
+                    {selectedProduto.estoque_total > 0 && (
+                      <span className="absolute top-2.5 right-2.5 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/15 text-emerald-600 border border-emerald-500/30">
+                        Em Estoque ({selectedProduto.estoque_total})
+                      </span>
+                    )}
+                    {itemImgs.length > 1 && (
+                      <span className="absolute bottom-2.5 right-2.5 px-1.5 py-0.5 rounded-md text-[10px] font-bold bg-black/60 text-white backdrop-blur-xs">
+                        {activeImgIdx + 1}/{itemImgs.length}
+                      </span>
+                    )}
                   </div>
-                )}
-                {selectedProduto.estoque_total > 0 && (
-                  <span className="absolute top-2.5 right-2.5 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/15 text-emerald-600 border border-emerald-500/30">
-                    Em Estoque ({selectedProduto.estoque_total})
-                  </span>
-                )}
-              </div>
+
+                  {/* Thumbnail Selector (se tiver mais de 1 imagem) */}
+                  {itemImgs.length > 1 && (
+                    <div className="flex items-center gap-2 justify-center pt-0.5">
+                      {itemImgs.map((img, idx) => (
+                        <button
+                          key={idx}
+                          type="button"
+                          onClick={() => setActiveImgIdx(idx)}
+                          className={cn(
+                            "w-12 h-12 rounded-lg border bg-white p-1 overflow-hidden transition-all shadow-xs",
+                            activeImgIdx === idx
+                              ? "border-primary ring-2 ring-primary/30 scale-105"
+                              : "opacity-60 hover:opacity-100"
+                          )}
+                        >
+                          <img src={img} alt={`Foto ${idx + 1}`} className="w-full h-full object-contain" />
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
 
               {/* Title & Brand */}
               <div className="space-y-1">
@@ -711,7 +753,8 @@ export default function Produtos() {
                 </button>
               </div>
             </div>
-          ) : (
+            );
+          })() : (
             <div className="rounded-2xl border bg-card p-8 text-center text-muted-foreground space-y-2">
               <Package size={40} className="mx-auto opacity-30" />
               <p className="font-semibold text-sm">Selecione uma peça</p>
