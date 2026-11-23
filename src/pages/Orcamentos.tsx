@@ -502,6 +502,24 @@ export default function Orcamentos() {
     if (desconto < 0) setDesconto(0);
   }, [subtotal]);
 
+  // Carrega itens pendentes enviados do carrinho do balcão de produtos
+  useEffect(() => {
+    try {
+      const pending = localStorage.getItem('pecafacil_carrinho_pendente');
+      if (pending) {
+        const parsed = JSON.parse(pending);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setItens(parsed);
+          setView('new');
+          localStorage.removeItem('pecafacil_carrinho_pendente');
+          toast({ title: 'Itens do carrinho transferidos para o novo orçamento/DAV!' });
+        }
+      }
+    } catch (e) {
+      console.warn('Erro ao carregar carrinho pendente:', e);
+    }
+  }, []);
+
   const addItem = (p: ProdutoDB) => {
     setItens(prev => {
       const existing = prev.find(i => i.produto.id === p.id);
