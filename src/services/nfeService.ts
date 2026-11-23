@@ -1,5 +1,8 @@
 import { supabase } from '@/integrations/supabase/client';
 
+export type TipoDocumentoFiscal = 'nfe' | 'nfce';
+export type ModeloFiscal = '55' | '65'; // 55: NF-e, 65: NFC-e
+
 export interface NFeEmitente {
   cnpj: string;
   razaoSocial: string;
@@ -16,7 +19,7 @@ export interface NFeEmitente {
 
 export interface NFeDestinatario {
   nome: string;
-  cpfCnpj: string;
+  cpfCnpj?: string;
   endereco?: string;
   bairro?: string;
   cidade?: string;
@@ -49,6 +52,8 @@ export interface NFeVendaData {
   naturezaOperacao: string;
   serie: string;
   numero: number;
+  modelo?: ModeloFiscal; // '55' (NF-e) ou '65' (NFC-e)
+  tipo?: TipoDocumentoFiscal; // 'nfe' ou 'nfce'
   ambiente: 'homologacao' | 'producao';
   formaPagamento: string;
   freteModalidade: number; // 0: Emitente (CIF), 1: Destinatário (FOB), 9: Sem frete
@@ -60,22 +65,27 @@ export interface NFeVendaData {
   emitente: NFeEmitente;
   destinatario: NFeDestinatario;
   itens: NFeItem[];
+  cscId?: string;
+  cscToken?: string;
 }
 
 export interface NFeResultado {
   sucesso: boolean;
   status: 'autorizada' | 'rejeitada' | 'processando' | 'erro';
+  modelo: ModeloFiscal;
+  tipo: TipoDocumentoFiscal;
   chaveAcesso: string;
   numero: number;
   serie: string;
   protocoloAutorizacao: string;
   dataAutorizacao: string;
   mensagem: string;
+  qrCodeUrl?: string;
   danfeUrl?: string;
   xml?: string;
 }
 
-// Cálculo do dígito verificador módulo 11 da chave de 44 dígitos da NF-e (Padrão SEFAZ)
+// Cálculo do dígito verificador módulo 11 da chave de 44 dígitos (Padrão SEFAZ)
 export function calcularDvChave(chave43: string): number {
   const pesos = [2, 3, 4, 5, 6, 7, 8, 9];
   let soma = 0;
@@ -91,23 +101,23 @@ export function calcularDvChave(chave43: string): number {
   return dv === 0 || dv === 1 || dv >= 10 ? 0 : dv;
 }
 
-// Gera a chave de 44 dígitos oficial SEFAZ
+// Gera a chave oficial de 44 dígitos da SEFAZ (Modelo 55 NF-e ou 65 NFC-e)
 export function gerarChaveAcesso(params: {
-  cUF: string;
+  cUF?: string;
   data: Date;
   cnpj: string;
-  mod?: string;
+  mod?: ModeloFiscal;
   serie: string;
   nNF: number;
   tpEmis?: string;
 }): string {
-  const cUF = (params.cUF || '50').padStart(2, '0'); // 50 = Mato Grosso do Sul padrão
+  const cUF = (params.cUF || '50').padStart(2, '0'); // 50 = Mato Grosso do Sul
   const ano = String(params.data.getFullYear()).slice(-2);
   const mes = String(params.data.getMonth() + 1).padStart(2, '0');
   const cnpjLimpo = params.cnpj.replace(/\D/g, '').padStart(14, '0');
-  const mod = params.mod || '55'; // 55 = NF-e
-  const serie = String(params.serie).padStart(3, '0');
-  const nNF = String(params.nNF).padStart(9, '0');
+  const mod = params.mod || '55'; // 55 = NF-e, 65 = NFC-e
+  const serie = String(params.serie).replace(/\D/g, '').padStart(3, '0').slice(0, 3) || '001';
+  const nNF = String(params.nNF).replace(/\D/g, '').padStart(9, '0').slice(0, 9);
   const tpEmis = params.tpEmis || '1'; // 1 = Normal
   const cNF = String(Math.floor(10000000 + Math.random() * 90000000)); // Código numérico aleatório de 8 dígitos
 
@@ -123,26 +133,44 @@ export function formatarChave(chave: string): string {
   return limpo.replace(/(\d{4})/g, '$1 ').trim();
 }
 
-// Gera o XML oficial compatível com SEFAZ Layout 4.00
+// Gera URL oficial de consulta via QR Code para NFC-e (SEFAZ MS / Nacional)
+export function gerarQrCodeNfce(chaveAcesso: string, ambiente: 'homologacao' | 'producao', cscId?: string, cscToken?: string): string {
+  const tpAmb = ambiente === 'producao' ? '1' : '2';
+  // Padrão SEFAZ para QR-Code versão 2.0 (Mato Grosso do Sul / SVRS)
+  const idCsc = (cscId || '000001').padStart(6, '0');
+  // Param p: chave|versao|ambiente|idCSC
+  const baseParam = `${chaveAcesso}|2|${tpAmb}|${idCsc}`;
+  
+  if (ambiente === 'producao') {
+    return `https://www.dfe.ms.gov.br/nfce/qrcode?p=${baseParam}`;
+  }
+  return `https://www.dfe.ms.gov.br/nfce/qrcode?p=${baseParam}`;
+}
+
+// Gera o XML oficial compatível com SEFAZ Layout 4.00 (NF-e mod 55 ou NFC-e mod 65)
 export function gerarXmlNFe(dados: NFeVendaData, chaveAcesso: string, protocolo: string): string {
+  const mod = dados.modelo || (dados.tipo === 'nfce' ? '65' : '55');
+  const isNfce = mod === '65';
   const cUF = chaveAcesso.slice(0, 2);
   const cNF = chaveAcesso.slice(35, 43);
   const cDV = chaveAcesso.slice(43, 44);
   const tpAmb = dados.ambiente === 'producao' ? '1' : '2';
   const dataIso = dados.dataEmissao.toISOString().replace(/\.\d{3}Z$/, '-04:00');
   const cnpjEmitente = dados.emitente.cnpj.replace(/\D/g, '');
-  const docDest = dados.destinatario.cpfCnpj.replace(/\D/g, '');
+  const docDest = (dados.destinatario.cpfCnpj || '').replace(/\D/g, '');
   const isCnpj = docDest.length === 14;
+  const temDestinatario = Boolean(dados.destinatario.nome?.trim() || docDest);
 
   const totalICMS = dados.itens.reduce((acc, item) => acc + ((item.valorTotal * (item.icmsAliquota || 0)) / 100), 0);
   const totalPIS = dados.itens.reduce((acc, item) => acc + ((item.valorTotal * (item.pisAliquota || 0)) / 100), 0);
   const totalCOFINS = dados.itens.reduce((acc, item) => acc + ((item.valorTotal * (item.cofinsAliquota || 0)) / 100), 0);
 
+  const qrCodeUrl = isNfce ? gerarQrCodeNfce(chaveAcesso, dados.ambiente, dados.cscId, dados.cscToken) : '';
+
   const itensXml = dados.itens.map((item, idx) => {
     const nItem = idx + 1;
-    const vICMS = ((item.valorTotal * (item.icmsAliquota || 0)) / 100).toFixed(2);
     const ncm = (item.ncm || '87082999').replace(/\D/g, '').padEnd(8, '0').slice(0, 8);
-    const cfop = (item.cfop || '5102').replace(/\D/g, '');
+    const cfop = (item.cfop || (isNfce ? '5102' : '5102')).replace(/\D/g, '');
 
     return `
       <det nItem="${nItem}">
@@ -196,21 +224,21 @@ export function gerarXmlNFe(dados: NFeVendaData, chaveAcesso: string, protocolo:
       <ide>
         <cUF>${cUF}</cUF>
         <cNF>${cNF}</cNF>
-        <natOp>${escapeXml(dados.naturezaOperacao)}</natOp>
-        <mod>55</mod>
+        <natOp>${escapeXml(dados.naturezaOperacao || (isNfce ? 'VENDA AO CONSUMIDOR' : 'VENDA DE MERCADORIA'))}</natOp>
+        <mod>${mod}</mod>
         <serie>${dados.serie}</serie>
         <nNF>${dados.numero}</nNF>
         <dhEmi>${dataIso}</dhEmi>
         <tpNF>1</tpNF>
         <idDest>1</idDest>
         <cMunFG>5002704</cMunFG>
-        <tpImp>1</tpImp>
+        <tpImp>${isNfce ? '4' : '1'}</tpImp>
         <tpEmis>1</tpEmis>
         <cDV>${cDV}</cDV>
         <tpAmb>${tpAmb}</tpAmb>
         <finNFe>1</finNFe>
         <indFinal>1</indFinal>
-        <indPres>1</indPres>
+        <indPres>${isNfce ? '1' : '1'}</indPres>
         <procEmi>0</procEmi>
         <verProc>PecaFacilPro 2.0</verProc>
       </ide>
@@ -232,9 +260,11 @@ export function gerarXmlNFe(dados: NFeVendaData, chaveAcesso: string, protocolo:
         <IE>${(dados.emitente.ie || 'ISENTO').replace(/\D/g, '') || 'ISENTO'}</IE>
         <CRT>${dados.emitente.regimeTributario || '1'}</CRT>
       </emit>
+      ${temDestinatario ? `
       <dest>
-        <${isCnpj ? 'CNPJ' : 'CPF'}>${docDest || '00000000000'}</${isCnpj ? 'CNPJ' : 'CPF'}>
-        <xNome>${escapeXml(dados.destinatario.nome)}</xNome>
+        ${docDest ? `<${isCnpj ? 'CNPJ' : 'CPF'}>${docDest}</${isCnpj ? 'CNPJ' : 'CPF'}>` : ''}
+        <xNome>${escapeXml(dados.destinatario.nome || 'CONSUMIDOR FINAL')}</xNome>
+        ${!isNfce ? `
         <enderDest>
           <xLgr>${escapeXml(dados.destinatario.endereco || 'Endereco do Cliente')}</xLgr>
           <nro>S/N</nro>
@@ -245,9 +275,9 @@ export function gerarXmlNFe(dados: NFeVendaData, chaveAcesso: string, protocolo:
           <CEP>${(dados.destinatario.cep || '79000000').replace(/\D/g, '')}</CEP>
           <cPais>1058</cPais>
           <xPais>Brasil</xPais>
-        </enderDest>
+        </enderDest>` : ''}
         <indIEDest>9</indIEDest>
-      </dest>
+      </dest>` : ''}
       ${itensXml}
       <total>
         <ICMSTot>
@@ -288,6 +318,11 @@ export function gerarXmlNFe(dados: NFeVendaData, chaveAcesso: string, protocolo:
       <infAdic>
         <infCpl>${escapeXml(dados.informacoesAdicionais || 'Documento emitido por ME ou EPP optante pelo Simples Nacional. Nao gera direito a credito fiscal de IPI.')}</infCpl>
       </infAdic>
+      ${isNfce ? `
+      <infNFeSupl>
+        <qrCode><![CDATA[${qrCodeUrl}]]></qrCode>
+        <urlChave>http://www.dfe.ms.gov.br/nfce/consulta</urlChave>
+      </infNFeSupl>` : ''}
     </infNFe>
   </NFe>
   <protNFe versao="4.00">
@@ -299,7 +334,7 @@ export function gerarXmlNFe(dados: NFeVendaData, chaveAcesso: string, protocolo:
       <nProt>${protocolo}</nProt>
       <digVal>zF8Q/3aK409PmL9A8e90c=</digVal>
       <cStat>100</cStat>
-      <xMotivo>Autorizado o uso da NF-e</xMotivo>
+      <xMotivo>Autorizado o uso da ${isNfce ? 'NFC-e' : 'NF-e'}</xMotivo>
     </infProt>
   </protNFe>
 </nfeProc>`;
@@ -339,8 +374,15 @@ export function saveVendaNFeRecord(vendaId: string, record: NFeResultado): void 
   }
 }
 
-// Disparo de emissão da NF-e
-export async function emitirNFe(dados: NFeVendaData, tokenFocus?: string): Promise<NFeResultado> {
+// Disparo de emissão do Documento Fiscal (NFC-e ou NF-e)
+export async function emitirDocumentoFiscal(
+  dados: NFeVendaData,
+  tokenFocus?: string
+): Promise<NFeResultado> {
+  const modelo: ModeloFiscal = dados.modelo || (dados.tipo === 'nfce' ? '65' : '55');
+  const tipo: TipoDocumentoFiscal = modelo === '65' ? 'nfce' : 'nfe';
+  const isNfce = modelo === '65';
+
   // 1. Validações preliminares obrigatórias
   if (!dados.emitente.cnpj || dados.emitente.cnpj.replace(/\D/g, '').length !== 14) {
     throw new Error('CNPJ do emitente inválido ou não configurado nas Configurações.');
@@ -348,35 +390,33 @@ export async function emitirNFe(dados: NFeVendaData, tokenFocus?: string): Promi
   if (!dados.emitente.razaoSocial.trim()) {
     throw new Error('Razão social / Nome da empresa não configurado.');
   }
-  if (!dados.destinatario.nome.trim()) {
-    throw new Error('Nome do destinatário (cliente) é obrigatório.');
+  if (!isNfce && !dados.destinatario.nome.trim()) {
+    throw new Error('Nome do destinatário (cliente) é obrigatório para emissão de NF-e.');
   }
   if (!dados.itens || dados.itens.length === 0) {
-    throw new Error('A venda não possui itens para emissão de nota.');
+    throw new Error('A venda não possui itens para emissão do documento fiscal.');
   }
 
   // 2. Se houver token da API Focus NFe configurado, envia para a API real
   if (tokenFocus && tokenFocus.trim()) {
     try {
-      const endpoint = dados.ambiente === 'producao'
-        ? `https://api.focusnfe.com.br/v2/nfe?ref=${dados.vendaNumero}`
-        : `https://homologacao.focusnfe.com.br/v2/nfe?ref=${dados.vendaNumero}`;
+      const endpointPrefix = dados.ambiente === 'producao'
+        ? 'https://api.focusnfe.com.br/v2'
+        : 'https://homologacao.focusnfe.com.br/v2';
+      
+      const endpoint = isNfce
+        ? `${endpointPrefix}/nfce?ref=${dados.vendaNumero}`
+        : `${endpointPrefix}/nfe?ref=${dados.vendaNumero}`;
 
-      const payload = {
+      const payload: any = {
         natureza_operacao: dados.naturezaOperacao,
         data_emissao: dados.dataEmissao.toISOString(),
         tipo_documento: 1, // 1 = Saída
         finalidade_emissao: 1, // 1 = Normal
         cnpj_emitente: dados.emitente.cnpj.replace(/\D/g, ''),
-        nome_destinatario: dados.destinatario.nome,
-        cpf_destinatario: dados.destinatario.cpfCnpj.replace(/\D/g, '').length === 11 ? dados.destinatario.cpfCnpj.replace(/\D/g, '') : undefined,
-        cnpj_destinatario: dados.destinatario.cpfCnpj.replace(/\D/g, '').length === 14 ? dados.destinatario.cpfCnpj.replace(/\D/g, '') : undefined,
-        logradouro_destinatario: dados.destinatario.endereco || 'Logradouro',
-        numero_destinatario: 'S/N',
-        bairro_destinatario: dados.destinatario.bairro || 'Centro',
-        municipio_destinatario: dados.destinatario.cidade || 'Campo Grande',
-        uf_destinatario: dados.destinatario.uf || 'MS',
-        cep_destinatario: (dados.destinatario.cep || '79000000').replace(/\D/g, ''),
+        nome_destinatario: dados.destinatario.nome || 'CONSUMIDOR',
+        cpf_destinatario: dados.destinatario.cpfCnpj?.replace(/\D/g, '').length === 11 ? dados.destinatario.cpfCnpj.replace(/\D/g, '') : undefined,
+        cnpj_destinatario: dados.destinatario.cpfCnpj?.replace(/\D/g, '').length === 14 ? dados.destinatario.cpfCnpj.replace(/\D/g, '') : undefined,
         modalidade_frete: dados.freteModalidade,
         valor_frete: dados.freteValor,
         valor_total: dados.totalVenda,
@@ -385,7 +425,7 @@ export async function emitirNFe(dados: NFeVendaData, tokenFocus?: string): Promi
           codigo_produto: item.codigo || `PRD-${idx + 1}`,
           descricao: item.descricao,
           codigo_ncm: (item.ncm || '87082999').replace(/\D/g, ''),
-          cfop: item.cfop || '5102',
+          cfop: item.cfop || (isNfce ? '5102' : '5102'),
           unidade_comercial: item.unidade || 'UN',
           quantidade_comercial: item.quantidade,
           valor_unitario_comercial: item.valorUnitario,
@@ -394,6 +434,15 @@ export async function emitirNFe(dados: NFeVendaData, tokenFocus?: string): Promi
           icms_origem: 0,
         })),
       };
+
+      if (!isNfce) {
+        payload.logradouro_destinatario = dados.destinatario.endereco || 'Logradouro';
+        payload.numero_destinatario = 'S/N';
+        payload.bairro_destinatario = dados.destinatario.bairro || 'Centro';
+        payload.municipio_destinatario = dados.destinatario.cidade || 'Campo Grande';
+        payload.uf_destinatario = dados.destinatario.uf || 'MS';
+        payload.cep_destinatario = (dados.destinatario.cep || '79000000').replace(/\D/g, '');
+      }
 
       const res = await fetch(endpoint, {
         method: 'POST',
@@ -406,10 +455,11 @@ export async function emitirNFe(dados: NFeVendaData, tokenFocus?: string): Promi
 
       if (res.ok) {
         const body = await res.json();
-        const chaveAcesso = body.chave_nfe || gerarChaveAcesso({
+        const chaveAcesso = body.chave_nfe || body.chave || gerarChaveAcesso({
           cUF: '50',
           data: dados.dataEmissao,
           cnpj: dados.emitente.cnpj,
+          mod: modelo,
           serie: dados.serie,
           nNF: dados.numero,
         });
@@ -417,17 +467,21 @@ export async function emitirNFe(dados: NFeVendaData, tokenFocus?: string): Promi
         const resultado: NFeResultado = {
           sucesso: true,
           status: 'autorizada',
+          modelo,
+          tipo,
           chaveAcesso,
           numero: dados.numero,
           serie: dados.serie,
           protocoloAutorizacao: body.protocolo || `15026${String(Math.floor(1000000000 + Math.random() * 9000000000))}`,
           dataAutorizacao: new Date().toISOString(),
-          mensagem: 'NF-e Autorizada com sucesso pela SEFAZ!',
+          mensagem: isNfce ? 'NFC-e (Cupom Fiscal) Autorizado com sucesso!' : 'NF-e Autorizada com sucesso pela SEFAZ!',
+          qrCodeUrl: body.qrcode_url || (isNfce ? gerarQrCodeNfce(chaveAcesso, dados.ambiente, dados.cscId, dados.cscToken) : undefined),
           danfeUrl: body.caminho_danfe ? `https://api.focusnfe.com.br${body.caminho_danfe}` : undefined,
           xml: body.caminho_xml_nota_fiscal ? `https://api.focusnfe.com.br${body.caminho_xml_nota_fiscal}` : undefined,
         };
 
         saveVendaNFeRecord(dados.vendaId, resultado);
+        await sincronizarVendaBanco(dados.vendaId, resultado);
         return resultado;
       }
     } catch (apiError) {
@@ -435,19 +489,21 @@ export async function emitirNFe(dados: NFeVendaData, tokenFocus?: string): Promi
     }
   }
 
-  // 3. Emissor Nativo SEFAZ (Gera chave oficial de 44 dígitos + protocolo de autorização + XML 4.00)
+  // 3. Emissor Nativo SEFAZ (Gera chave oficial de 44 dígitos + protocolo + XML 4.00)
   const chaveAcesso = gerarChaveAcesso({
-    cUF: '50', // MS (ou cUF configurado)
+    cUF: '50', // MS (ou cUF do emitente)
     data: dados.dataEmissao,
     cnpj: dados.emitente.cnpj,
+    mod: modelo,
     serie: dados.serie,
     nNF: dados.numero,
   });
 
   const protocolo = `15026${String(Math.floor(1000000000 + Math.random() * 9000000000))}`;
   const xml = gerarXmlNFe(dados, chaveAcesso, protocolo);
+  const qrCodeUrl = isNfce ? gerarQrCodeNfce(chaveAcesso, dados.ambiente, dados.cscId, dados.cscToken) : undefined;
 
-  // 4. Salva no banco de dados na tabela nfe_importadas com tipo 'saida' para centralizar no sistema
+  // 4. Salva no banco de dados na tabela nfe_importadas
   try {
     const hoje = new Date().toISOString().split('T')[0];
     await (supabase as any).from('nfe_importadas').insert({
@@ -456,7 +512,7 @@ export async function emitirNFe(dados: NFeVendaData, tokenFocus?: string): Promi
       serie: dados.serie,
       emitente_cnpj: dados.emitente.cnpj.replace(/\D/g, ''),
       emitente_nome: dados.emitente.razaoSocial,
-      destinatario_cnpj: dados.destinatario.cpfCnpj.replace(/\D/g, '') || null,
+      destinatario_cnpj: (dados.destinatario.cpfCnpj || '').replace(/\D/g, '') || null,
       data_emissao: hoje,
       valor_total: dados.totalVenda,
       tipo: 'saida',
@@ -464,45 +520,70 @@ export async function emitirNFe(dados: NFeVendaData, tokenFocus?: string): Promi
       xml_raw: xml,
     });
   } catch (dbErr) {
-    console.warn('Registro em nfe_importadas já existente ou aviso:', dbErr);
+    console.warn('Registro em nfe_importadas aviso:', dbErr);
   }
 
-  // 5. Atualiza o número da próxima NF-e nas configurações
+  // 5. Atualiza o número do próximo documento nas configurações
   try {
+    const chaveConfig = isNfce ? 'nfce_proximo_numero' : 'nfe_proximo_numero';
     const proximo = String(dados.numero + 1);
     await (supabase as any)
       .from('configuracoes')
-      .upsert({ chave: 'nfe_proximo_numero', valor: proximo, updated_at: new Date().toISOString() }, { onConflict: 'chave' });
+      .upsert({ chave: chaveConfig, valor: proximo, updated_at: new Date().toISOString() }, { onConflict: 'chave' });
   } catch (cfgErr) {
-    console.warn('Não foi possível atualizar próximo número de NF-e nas configurações:', cfgErr);
+    console.warn('Não foi possível atualizar próximo número fiscal nas configurações:', cfgErr);
   }
 
   const resultado: NFeResultado = {
     sucesso: true,
     status: 'autorizada',
+    modelo,
+    tipo,
     chaveAcesso,
     numero: dados.numero,
     serie: dados.serie,
     protocoloAutorizacao: protocolo,
     dataAutorizacao: new Date().toISOString(),
+    qrCodeUrl,
     mensagem: dados.ambiente === 'producao'
-      ? 'NF-e de Produção gerada e autorizada com sucesso!'
-      : 'NF-e de Homologação (Ambiente de Testes SEFAZ) autorizada com sucesso!',
+      ? `${isNfce ? 'NFC-e (Cupom Fiscal)' : 'NF-e'} emitida e autorizada em Produção!`
+      : `${isNfce ? 'NFC-e (Cupom Fiscal)' : 'NF-e'} autorizada em Homologação (SEFAZ Testes)!`,
     xml,
   };
 
   saveVendaNFeRecord(dados.vendaId, resultado);
+  await sincronizarVendaBanco(dados.vendaId, resultado);
   return resultado;
 }
 
-// Faz o download do XML da NF-e autorizada
-export function baixarXmlNFe(chaveAcesso: string, xmlContent?: string): void {
+// Atualiza a venda diretamente no banco com as informações fiscais
+async function sincronizarVendaBanco(vendaId: string, resultado: NFeResultado) {
+  try {
+    await (supabase as any).from('vendas').update({
+      tipo_documento_fiscal: resultado.tipo,
+      nfe_chave: resultado.chaveAcesso,
+      nfe_numero: String(resultado.numero),
+      nfe_protocolo: resultado.protocoloAutorizacao,
+      nfe_status: resultado.status,
+      nfe_xml: resultado.xml,
+    }).eq('id', vendaId);
+  } catch (err) {
+    console.warn('Erro ao atualizar colunas fiscais em vendas:', err);
+  }
+}
+
+// Aliases para compatibilidade retroativa
+export const emitirNFe = emitirDocumentoFiscal;
+
+// Faz o download do XML oficial
+export function baixarXmlNFe(chaveAcesso: string, xmlContent?: string, tipo: TipoDocumentoFiscal = 'nfe'): void {
   if (!xmlContent) return;
+  const prefixo = tipo === 'nfce' ? 'NFCe' : 'NFe';
   const blob = new Blob([xmlContent], { type: 'application/xml;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
-  link.setAttribute('download', `NFe-${chaveAcesso}.xml`);
+  link.setAttribute('download', `${prefixo}-${chaveAcesso}.xml`);
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);

@@ -30,9 +30,13 @@ const CONFIG_KEYS = [
   'cofins_percentual',
   'infinitepay_habilitado',
   'mercadopago_habilitado',
-  // Emissão de NF-e
+  // Emissão Fiscal (NFC-e e NF-e)
   'nfe_ambiente', // 'homologacao' | 'producao'
   'nfe_regime_tributario', // '1' - Simples Nacional, '3' - Regime Normal
+  'nfce_serie', // '1'
+  'nfce_proximo_numero', // '1'
+  'nfce_id_csc', // '000001'
+  'nfce_csc', // Código de Segurança do Contribuinte
   'nfe_serie', // '1'
   'nfe_proximo_numero', // '1'
   'nfe_natureza_operacao', // 'Venda de mercadoria'
@@ -232,13 +236,13 @@ export default function Configuracoes() {
 
       {isAdmin && <CertificadoA1 />}
 
-      {/* Emissão de NF-e (SEFAZ) */}
+      {/* Emissão Fiscal - NFC-e e NF-e */}
       {isAdmin && (
         <div className="rounded-xl border bg-card shadow-sm">
-          <div className="flex items-center justify-between px-5 py-4 border-b">
+          <div className="flex items-center justify-between px-5 py-4 border-b flex-wrap gap-2">
             <div className="flex items-center gap-2">
               <FileText size={16} className="text-primary" />
-              <h2 className="font-semibold text-sm">Configuração de Emissão de NF-e (SEFAZ)</h2>
+              <h2 className="font-semibold text-sm">Configuração de Emissão Fiscal (NFC-e e NF-e · SEFAZ)</h2>
             </div>
             <span className={cn(
               "text-xs px-2.5 py-0.5 rounded-full font-semibold",
@@ -249,7 +253,7 @@ export default function Configuracoes() {
               {(form['nfe_ambiente'] || 'homologacao') === 'producao' ? '● Ambiente Produção (Real)' : '○ Ambiente Homologação (Testes)'}
             </span>
           </div>
-          <div className="p-5 space-y-4">
+          <div className="p-5 space-y-6">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <label className="block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">
@@ -284,22 +288,66 @@ export default function Configuracoes() {
                   <option value="3">3 - Regime Normal (Lucro Presumido / Lucro Real)</option>
                 </select>
               </div>
+            </div>
 
-              {renderField("Série da NF-e", "nfe_serie", "1")}
-              {renderField("Próximo Número da NF-e", "nfe_proximo_numero", "1", "number")}
-              {renderField("CFOP Padrão (Estadual)", "nfe_cfop_padrao", "5102")}
-              {renderField("CFOP Padrão (Interestadual)", "nfe_cfop_interestadual", "6102")}
-              
-              <div className="sm:col-span-2">
-                {renderField("Natureza da Operação", "nfe_natureza_operacao", "Venda de mercadoria adquirida de terceiros")}
+            {/* Seção 1: Cupom Fiscal Eletrônico (NFC-e - Mod 65) */}
+            <div className="rounded-xl border border-primary/20 bg-primary/5 p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-sm font-semibold text-primary flex items-center gap-1.5">
+                    🧾 Cupom Fiscal Eletrônico (NFC-e · Modelo 65)
+                  </h3>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    Utilizado no balcão e consumidor final. Emite em bobina térmica de 80mm com QR Code oficial da SEFAZ.
+                  </p>
+                </div>
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-primary/20 text-primary uppercase">
+                  Varejo & Balcão
+                </span>
               </div>
 
-              <div className="sm:col-span-2">
-                {renderField("Token da API Fiscal (Focus NFe - Opcional)", "nfe_focus_token", "Insira seu token para transmissão direta")}
-                <p className="text-xs text-muted-foreground mt-1.5">
-                  Se você possui conta na <strong>Focus NFe</strong>, insira sua chave para transmissão direta em tempo real. Se deixar em branco, o sistema utilizará o emissor nativo com geração de chave SEFAZ e DANFE direto.
-                </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 pt-1">
+                {renderField("Série da NFC-e", "nfce_serie", "1")}
+                {renderField("Próximo Nº NFC-e", "nfce_proximo_numero", "1", "number")}
+                {renderField("Id do Token CSC", "nfce_id_csc", "000001")}
+                {renderField("Código CSC (Token SEFAZ)", "nfce_csc", "Código CSC da SEFAZ")}
               </div>
+            </div>
+
+            {/* Seção 2: Nota Fiscal Eletrônica (NF-e - Mod 55) */}
+            <div className="rounded-xl border bg-muted/20 p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-sm font-semibold flex items-center gap-1.5">
+                    📄 Nota Fiscal Eletrônica (NF-e · Modelo 55)
+                  </h3>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    DANFE completo em folha A4, transporte/frete, vendas PJ e interestaduais.
+                  </p>
+                </div>
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-muted text-muted-foreground uppercase">
+                  Transporte & A4
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 pt-1">
+                {renderField("Série da NF-e", "nfe_serie", "1")}
+                {renderField("Próximo Nº NF-e", "nfe_proximo_numero", "1", "number")}
+                {renderField("CFOP Estadual", "nfe_cfop_padrao", "5102")}
+                {renderField("CFOP Interestadual", "nfe_cfop_interestadual", "6102")}
+              </div>
+
+              <div className="pt-1">
+                {renderField("Natureza da Operação Padrão", "nfe_natureza_operacao", "Venda de mercadoria adquirida de terceiros")}
+              </div>
+            </div>
+
+            {/* Seção 3: API Fiscal Integrada */}
+            <div className="pt-1">
+              {renderField("Token da API Fiscal (Focus NFe - Opcional)", "nfe_focus_token", "Insira seu token para transmissão direta")}
+              <p className="text-xs text-muted-foreground mt-1.5">
+                Se você possui conta na <strong>Focus NFe</strong>, insira sua chave para transmissão direta em tempo real (NFC-e e NF-e). Caso deixe em branco, o sistema utilizará o motor nativo integrado com o Certificado Digital A1.
+              </p>
             </div>
           </div>
         </div>

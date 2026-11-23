@@ -1,5 +1,5 @@
 import { useAppContext } from '@/components/Layout';
-import { ShoppingCart, Loader2, Eye, X, FileText, Printer, Download, CheckCircle, AlertCircle, Send } from 'lucide-react';
+import { ShoppingCart, Loader2, Eye, X, FileText, Printer, Download, CheckCircle, AlertCircle, Send, Receipt, UserCheck } from 'lucide-react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { useState } from 'react';
@@ -8,11 +8,14 @@ import { useToast } from '@/hooks/use-toast';
 import {
   NFeVendaData,
   NFeResultado,
+  TipoDocumentoFiscal,
+  ModeloFiscal,
   getVendaNFeRecord,
-  emitirNFe,
+  emitirDocumentoFiscal,
   baixarXmlNFe,
 } from '@/services/nfeService';
 import DanfeModal from '@/components/DanfeModal';
+import DanfeNfceModal from '@/components/DanfeNfceModal';
 
 interface VendaDB {
   id: string;
@@ -25,6 +28,12 @@ interface VendaDB {
   created_at: string;
   frete_transportadora: string;
   frete_valor: number;
+  tipo_documento_fiscal?: string;
+  nfe_chave?: string;
+  nfe_numero?: string;
+  nfe_protocolo?: string;
+  nfe_status?: string;
+  nfe_xml?: string;
 }
 
 interface ItemVendaDB {
@@ -93,8 +102,9 @@ export default function Vendas() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const { data: itensDetail } = useItensVenda(selectedId);
 
-  // Estados para Emissão e Visualização de DANFE
+  // Estados para Emissão e Visualização
   const [vendaParaEmitir, setVendaParaEmitir] = useState<VendaDB | null>(null);
+  const [tipoDocumentoEmissao, setTipoDocumentoEmissao] = useState<TipoDocumentoFiscal>('nfce');
   const { data: itensParaEmitir } = useItensVenda(vendaParaEmitir?.id ?? null);
   const [danfeAtivo, setDanfeAtivo] = useState<{ dados: NFeVendaData; resultado: NFeResultado } | null>(null);
   const [emitindo, setEmitindo] = useState(false);
@@ -114,8 +124,9 @@ export default function Vendas() {
   const selectedVenda = vendas?.find(v => v.id === selectedId);
 
   // Iniciar fluxo de emissão
-  const handleAbrirEmissao = async (venda: VendaDB) => {
+  const handleAbrirEmissao = async (venda: VendaDB, tipoPref: TipoDocumentoFiscal = 'nfce') => {
     setVendaParaEmitir(venda);
+    setTipoDocumentoEmissao(tipoPref);
 
     // Carrega dados do cliente se cadastrado por ID ou busca por nome
     let cliData: any = null;
@@ -153,12 +164,14 @@ export default function Vendas() {
     });
   };
 
-  // Disparo da transmissão da NF-e
+  // Disparo da transmissão da NFC-e ou NF-e
   const handleConfirmarEmissao = async () => {
     if (!vendaParaEmitir || !itensParaEmitir) return;
 
-    if (!destinatarioForm.nome.trim()) {
-      toast({ title: 'Nome do cliente é obrigatório', variant: 'destructive' });
+    const isNfce = tipoDocumentoEmissao === 'nfce';
+
+    if (!isNfce && !destinatarioForm.nome.trim()) {
+      toast({ title: 'Nome do cliente é obrigatório para emissão de NF-e', variant: 'destructive' });
       return;
     }
 
@@ -175,23 +188,25 @@ export default function Vendas() {
     setEmitindo(true);
 
     try {
-      const serie = config?.['nfe_serie'] || '1';
-      const proximoNum = parseInt(config?.['nfe_proximo_numero'] || '1', 10);
+      const serie = isNfce ? (config?.['nfce_serie'] || '1') : (config?.['nfe_serie'] || '1');
+      const proximoNum = parseInt(isNfce ? (config?.['nfce_proximo_numero'] || '1') : (config?.['nfe_proximo_numero'] || '1'), 10);
       const ambiente = (config?.['nfe_ambiente'] || 'homologacao') as 'homologacao' | 'producao';
-      const natOp = config?.['nfe_natureza_operacao'] || 'Venda de mercadoria adquirida de terceiros';
+      const natOp = isNfce ? 'VENDA AO CONSUMIDOR' : (config?.['nfe_natureza_operacao'] || 'Venda de mercadoria adquirida de terceiros');
       const cfopPadrao = config?.['nfe_cfop_padrao'] || '5102';
       const tokenFocus = config?.['nfe_focus_token'] || '';
 
       const freteVal = Number(vendaParaEmitir.frete_valor) || 0;
       const totalItens = itensParaEmitir.reduce((acc, it) => acc + Number(it.subtotal), 0);
 
-      const nfeData: NFeVendaData = {
+      const docData: NFeVendaData = {
         vendaId: vendaParaEmitir.id,
         vendaNumero: vendaParaEmitir.numero,
         dataEmissao: new Date(),
         naturezaOperacao: natOp,
         serie,
         numero: proximoNum,
+        modelo: isNfce ? '65' : '55',
+        tipo: tipoDocumentoEmissao,
         ambiente,
         formaPagamento: vendaParaEmitir.forma_pagamento || 'Dinheiro',
         freteModalidade: freteVal > 0 ? 0 : 9,
@@ -199,6 +214,8 @@ export default function Vendas() {
         freteValor: freteVal,
         totalProdutos: totalItens,
         totalVenda: Number(vendaParaEmitir.total),
+        cscId: config?.['nfce_id_csc'] || '000001',
+        cscToken: config?.['nfce_csc'] || '',
         emitente: {
           cnpj: cnpjEmpresa,
           razaoSocial: config?.['empresa_nome'] || 'AutoPeças',
@@ -212,7 +229,7 @@ export default function Vendas() {
           regimeTributario: config?.['nfe_regime_tributario'] || '1',
         },
         destinatario: {
-          nome: destinatarioForm.nome,
+          nome: destinatarioForm.nome.trim() || 'CONSUMIDOR FINAL',
           cpfCnpj: destinatarioForm.cpfCnpj,
           endereco: destinatarioForm.endereco,
           bairro: destinatarioForm.bairro,
@@ -237,22 +254,23 @@ export default function Vendas() {
         })),
       };
 
-      const resultado = await emitirNFe(nfeData, tokenFocus);
+      const resultado = await emitirDocumentoFiscal(docData, tokenFocus);
 
       queryClient.invalidateQueries({ queryKey: ['configuracoes'] });
+      queryClient.invalidateQueries({ queryKey: ['vendas'] });
       queryClient.invalidateQueries({ queryKey: ['dashboard-nfes'] });
 
       toast({
-        title: 'NF-e Autorizada com Sucesso!',
+        title: isNfce ? 'Cupom Fiscal (NFC-e) Emitido com Sucesso!' : 'NF-e Autorizada com Sucesso!',
         description: `Chave: ${resultado.chaveAcesso.slice(0, 15)}... Pronto para impressão.`,
       });
 
       setVendaParaEmitir(null);
-      // Abre o DANFE diretamente para conferência e impressão
-      setDanfeAtivo({ dados: nfeData, resultado });
+      // Abre o DANFE/Cupom diretamente para conferência e impressão
+      setDanfeAtivo({ dados: docData, resultado });
     } catch (err: any) {
       toast({
-        title: 'Erro na emissão da NF-e',
+        title: 'Erro na emissão fiscal',
         description: err.message || 'Verifique os dados cadastrais da empresa e tente novamente.',
         variant: 'destructive',
       });
@@ -261,16 +279,20 @@ export default function Vendas() {
     }
   };
 
-  // Abrir DANFE já emitido anteriormente
-  const handleAbrirDanfeExistente = (venda: VendaDB, nfeRecord: NFeResultado) => {
+  // Abrir documento já emitido anteriormente (NFC-e ou NF-e)
+  const handleAbrirDanfeExistente = (venda: VendaDB, nfeRecord?: NFeResultado | null) => {
+    const isNfce = (nfeRecord?.tipo || venda.tipo_documento_fiscal) === 'nfce';
     const freteVal = Number(venda.frete_valor) || 0;
+
     const nfeData: NFeVendaData = {
       vendaId: venda.id,
       vendaNumero: venda.numero,
-      dataEmissao: new Date(nfeRecord.dataAutorizacao || venda.created_at),
-      naturezaOperacao: config?.['nfe_natureza_operacao'] || 'Venda de mercadoria adquirida de terceiros',
-      serie: nfeRecord.serie || '1',
-      numero: nfeRecord.numero,
+      dataEmissao: new Date(nfeRecord?.dataAutorizacao || venda.created_at),
+      naturezaOperacao: isNfce ? 'VENDA AO CONSUMIDOR' : (config?.['nfe_natureza_operacao'] || 'Venda de mercadoria adquirida de terceiros'),
+      serie: nfeRecord?.serie || '1',
+      numero: nfeRecord?.numero || Number(venda.nfe_numero || 1),
+      modelo: isNfce ? '65' : '55',
+      tipo: isNfce ? 'nfce' : 'nfe',
       ambiente: (config?.['nfe_ambiente'] || 'homologacao') as 'homologacao' | 'producao',
       formaPagamento: venda.forma_pagamento || 'Dinheiro',
       freteModalidade: freteVal > 0 ? 0 : 9,
@@ -280,7 +302,7 @@ export default function Vendas() {
       totalVenda: Number(venda.total),
       emitente: {
         cnpj: config?.['empresa_cnpj'] || '00.000.000/0000-00',
-        razaoSocial: config?.['empresa_nome'] || 'AutoPeças',
+        razaoSocial: config?.['empresa_nome'] || 'AutoPeças MGN',
         ie: config?.['empresa_ie'] || 'ISENTO',
         endereco: config?.['empresa_endereco'] || 'Rua Principal',
         cidade: config?.['empresa_cidade'] || 'Campo Grande',
@@ -291,8 +313,8 @@ export default function Vendas() {
         regimeTributario: config?.['nfe_regime_tributario'] || '1',
       },
       destinatario: {
-        nome: venda.cliente_nome,
-        cpfCnpj: '',
+        nome: venda.cliente_nome || 'CONSUMIDOR FINAL',
+        cpfCnpj: (venda as any).cliente_cpf_cnpj || '',
       },
       itens: [
         {
@@ -310,7 +332,21 @@ export default function Vendas() {
       ],
     };
 
-    setDanfeAtivo({ dados: nfeData, resultado: nfeRecord });
+    const resultado: NFeResultado = nfeRecord || {
+      sucesso: true,
+      status: 'autorizada',
+      modelo: isNfce ? '65' : '55',
+      tipo: isNfce ? 'nfce' : 'nfe',
+      chaveAcesso: venda.nfe_chave || '50260000000000000000000000000000000000000000',
+      numero: Number(venda.nfe_numero || 1),
+      serie: '1',
+      protocoloAutorizacao: venda.nfe_protocolo || '150260000000000',
+      dataAutorizacao: venda.created_at,
+      mensagem: isNfce ? 'NFC-e Autorizada' : 'NF-e Autorizada',
+      xml: venda.nfe_xml,
+    };
+
+    setDanfeAtivo({ dados: nfeData, resultado });
   };
 
   return (
@@ -319,7 +355,7 @@ export default function Vendas() {
         <div>
           <h1 className="text-2xl font-bold">Vendas e Emissão Fiscal</h1>
           <p className="text-sm text-muted-foreground mt-0.5">
-            {vendas?.length ?? 0} vendas realizadas · Emissão de NF-e e DANFE para transporte
+            {vendas?.length ?? 0} vendas realizadas · Emissão de Cupom Fiscal (NFC-e) e NF-e
           </p>
         </div>
 
@@ -346,7 +382,7 @@ export default function Vendas() {
         <div className="rounded-xl border bg-card shadow-sm overflow-hidden">
           <div className="flex items-center gap-2 px-5 py-4 border-b">
             <ShoppingCart size={16} className="text-primary" />
-            <h2 className="font-semibold text-sm">Histórico de Vendas & Emissão de NF-e</h2>
+            <h2 className="font-semibold text-sm">Histórico de Vendas & Documentos Fiscais</h2>
           </div>
           <div className="overflow-x-auto">
             <table className="data-table">
@@ -357,14 +393,16 @@ export default function Vendas() {
                   <th>Data</th>
                   <th>Total</th>
                   <th>Pagamento</th>
-                  <th>NF-e / Transporte</th>
+                  <th>Documento Fiscal</th>
                   <th className="text-right">Ações</th>
                 </tr>
               </thead>
               <tbody>
                 {vendas.map(v => {
                   const nfeRecord = getVendaNFeRecord(v.id);
-                  const isEmitida = nfeRecord?.status === 'autorizada';
+                  const isEmitida = nfeRecord?.status === 'autorizada' || v.nfe_status === 'autorizada';
+                  const isNfce = (nfeRecord?.tipo || v.tipo_documento_fiscal) === 'nfce';
+                  const numDoc = nfeRecord?.numero || v.nfe_numero;
 
                   return (
                     <tr key={v.id}>
@@ -380,14 +418,21 @@ export default function Vendas() {
                         </span>
                       </td>
 
-                      {/* Coluna de Status da NF-e */}
+                      {/* Coluna de Status do Documento Fiscal */}
                       <td>
                         {isEmitida ? (
                           <div className="flex items-center gap-1.5">
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-semibold bg-emerald-500/15 text-emerald-600">
-                              <CheckCircle size={12} />
-                              NF-e Nº {nfeRecord.numero}
-                            </span>
+                            {isNfce ? (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-semibold bg-emerald-500/15 text-emerald-600">
+                                <Receipt size={12} />
+                                NFC-e Nº {numDoc}
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-semibold bg-blue-500/15 text-blue-600">
+                                <FileText size={12} />
+                                NF-e Nº {numDoc}
+                              </span>
+                            )}
                           </div>
                         ) : (
                           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium bg-slate-500/10 text-muted-foreground">
@@ -403,31 +448,44 @@ export default function Vendas() {
                             <>
                               <button
                                 onClick={() => handleAbrirDanfeExistente(v, nfeRecord)}
-                                className="px-2.5 py-1 text-xs font-semibold rounded-md bg-emerald-600 text-white hover:bg-emerald-500 transition-colors flex items-center gap-1 shadow-sm"
-                                title="Visualizar e Imprimir DANFE"
+                                className={cn(
+                                  "px-2.5 py-1 text-xs font-semibold rounded-md text-white transition-colors flex items-center gap-1 shadow-sm",
+                                  isNfce ? "bg-emerald-600 hover:bg-emerald-500" : "bg-blue-600 hover:bg-blue-500"
+                                )}
+                                title={isNfce ? "Visualizar e Imprimir Cupom Fiscal (80mm)" : "Visualizar e Imprimir DANFE A4"}
                               >
-                                <Printer size={13} />
-                                DANFE
+                                {isNfce ? <Receipt size={13} /> : <Printer size={13} />}
+                                {isNfce ? 'Cupom Fiscal' : 'DANFE'}
                               </button>
-                              {nfeRecord.xml && (
+                              {(nfeRecord?.xml || v.nfe_xml) && (
                                 <button
-                                  onClick={() => baixarXmlNFe(nfeRecord.chaveAcesso, nfeRecord.xml)}
+                                  onClick={() => baixarXmlNFe(nfeRecord?.chaveAcesso || v.nfe_chave || '', nfeRecord?.xml || v.nfe_xml, isNfce ? 'nfce' : 'nfe')}
                                   className="p-1.5 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
-                                  title="Baixar XML da NF-e"
+                                  title="Baixar XML oficial"
                                 >
                                   <Download size={14} />
                                 </button>
                               )}
                             </>
                           ) : (
-                            <button
-                              onClick={() => handleAbrirEmissao(v)}
-                              className="px-2.5 py-1 text-xs font-semibold rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors flex items-center gap-1 shadow-sm"
-                              title="Emitir NF-e para transporte"
-                            >
-                              <FileText size={13} />
-                              Emitir NF-e
-                            </button>
+                            <div className="flex items-center gap-1">
+                              <button
+                                onClick={() => handleAbrirEmissao(v, 'nfce')}
+                                className="px-2.5 py-1 text-xs font-semibold rounded-md bg-emerald-600 text-white hover:bg-emerald-500 transition-colors flex items-center gap-1 shadow-sm"
+                                title="Emitir Cupom Fiscal (NFC-e) para consumidor balcão"
+                              >
+                                <Receipt size={13} />
+                                Cupom (NFC-e)
+                              </button>
+                              <button
+                                onClick={() => handleAbrirEmissao(v, 'nfe')}
+                                className="px-2.5 py-1 text-xs font-semibold rounded-md border hover:bg-muted transition-colors flex items-center gap-1 shadow-sm"
+                                title="Emitir NF-e (DANFE A4) completa"
+                              >
+                                <FileText size={13} />
+                                NF-e
+                              </button>
+                            </div>
                           )}
 
                           <button
@@ -448,14 +506,20 @@ export default function Vendas() {
         </div>
       )}
 
-      {/* Modal de Confirmação e Emissão de NF-e */}
+      {/* Modal de Confirmação e Emissão Fiscal */}
       {vendaParaEmitir && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-fade-in">
           <div className="relative bg-background rounded-2xl shadow-xl w-full max-w-xl max-h-[90vh] overflow-y-auto border">
             <div className="flex items-center justify-between px-6 py-4 border-b sticky top-0 bg-background z-10">
               <div className="flex items-center gap-2">
-                <FileText className="text-primary" size={20} />
-                <h2 className="font-bold text-lg">Emitir NF-e · Venda {vendaParaEmitir.numero}</h2>
+                {tipoDocumentoEmissao === 'nfce' ? (
+                  <Receipt className="text-emerald-500" size={20} />
+                ) : (
+                  <FileText className="text-primary" size={20} />
+                )}
+                <h2 className="font-bold text-lg">
+                  Emitir {tipoDocumentoEmissao === 'nfce' ? 'Cupom Fiscal (NFC-e)' : 'Nota Fiscal (NF-e)'} · Venda {vendaParaEmitir.numero}
+                </h2>
               </div>
               <button
                 onClick={() => setVendaParaEmitir(null)}
@@ -467,7 +531,53 @@ export default function Vendas() {
             </div>
 
             <div className="p-6 space-y-5">
-              {/* Alerta de Ambiente */}
+              {/* Seletor de Tipo de Documento: NFC-e ou NF-e */}
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
+                  Escolha o Tipo de Documento Fiscal
+                </label>
+                <div className="grid grid-cols-2 gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setTipoDocumentoEmissao('nfce')}
+                    className={cn(
+                      "p-3.5 rounded-xl border text-left transition-all",
+                      tipoDocumentoEmissao === 'nfce'
+                        ? "border-emerald-500 bg-emerald-500/10 ring-2 ring-emerald-500/30"
+                        : "border-border hover:bg-muted/50"
+                    )}
+                  >
+                    <div className="flex items-center gap-2 font-bold text-sm text-foreground">
+                      <Receipt size={16} className="text-emerald-600" />
+                      Cupom Fiscal (NFC-e)
+                    </div>
+                    <p className="text-[11px] text-muted-foreground mt-1">
+                      Modelo 65 · Varejo e Balcão. Emissão rápida em bobina 80mm com QR Code.
+                    </p>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setTipoDocumentoEmissao('nfe')}
+                    className={cn(
+                      "p-3.5 rounded-xl border text-left transition-all",
+                      tipoDocumentoEmissao === 'nfe'
+                        ? "border-primary bg-primary/10 ring-2 ring-primary/30"
+                        : "border-border hover:bg-muted/50"
+                    )}
+                  >
+                    <div className="flex items-center gap-2 font-bold text-sm text-foreground">
+                      <FileText size={16} className="text-primary" />
+                      Nota Fiscal (NF-e)
+                    </div>
+                    <p className="text-[11px] text-muted-foreground mt-1">
+                      Modelo 55 · DANFE A4 tradicional. Obrigatória para transporte de carga e PJ.
+                    </p>
+                  </button>
+                </div>
+              </div>
+
+              {/* Alerta de Ambiente SEFAZ */}
               <div className={cn(
                 "p-3 rounded-xl border text-xs flex items-center justify-between",
                 config?.['nfe_ambiente'] === 'producao'
@@ -481,14 +591,32 @@ export default function Vendas() {
                     <strong>{config?.['nfe_ambiente'] === 'producao' ? 'Produção SEFAZ Oficial (Nota Real)' : 'Homologação SEFAZ (Ambiente de Testes)'}</strong>
                   </span>
                 </div>
-                <span className="font-mono text-[11px]">Série {config?.['nfe_serie'] || '1'} · Nº {config?.['nfe_proximo_numero'] || '1'}</span>
+                <span className="font-mono text-[11px]">
+                  {tipoDocumentoEmissao === 'nfce' ? (
+                    `NFC-e Série ${config?.['nfce_serie'] || '1'} · Nº ${config?.['nfce_proximo_numero'] || '1'}`
+                  ) : (
+                    `NF-e Série ${config?.['nfe_serie'] || '1'} · Nº ${config?.['nfe_proximo_numero'] || '1'}`
+                  )}
+                </span>
               </div>
 
-              {/* Dados do Destinatário */}
+              {/* Dados do Destinatário / Consumidor */}
               <div className="space-y-3">
-                <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                  Dados do Destinatário (Cliente)
-                </h3>
+                <div className="flex items-center justify-between">
+                  <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                    {tipoDocumentoEmissao === 'nfce' ? 'Dados do Consumidor (Opcional)' : 'Dados do Destinatário (Cliente)'}
+                  </h3>
+                  {tipoDocumentoEmissao === 'nfce' && (
+                    <button
+                      type="button"
+                      onClick={() => setDestinatarioForm(f => ({ ...f, nome: 'CONSUMIDOR FINAL', cpfCnpj: '' }))}
+                      className="text-[11px] text-primary hover:underline flex items-center gap-1"
+                    >
+                      <UserCheck size={12} /> Consumidor Não Identificado
+                    </button>
+                  )}
+                </div>
+
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div className="sm:col-span-2">
                     <label className="block text-xs font-medium mb-1">Nome / Razão Social</label>
@@ -497,11 +625,13 @@ export default function Vendas() {
                       value={destinatarioForm.nome}
                       onChange={e => setDestinatarioForm(f => ({ ...f, nome: e.target.value }))}
                       className="w-full rounded-lg border bg-background px-3 py-2 text-sm"
-                      placeholder="Nome do cliente"
+                      placeholder={tipoDocumentoEmissao === 'nfce' ? "CONSUMIDOR FINAL ou Nome" : "Nome do cliente ou empresa"}
                     />
                   </div>
                   <div>
-                    <label className="block text-xs font-medium mb-1">CPF ou CNPJ</label>
+                    <label className="block text-xs font-medium mb-1">
+                      CPF ou CNPJ {tipoDocumentoEmissao === 'nfce' && '(Opcional no cupom)'}
+                    </label>
                     <input
                       type="text"
                       value={destinatarioForm.cpfCnpj}
@@ -520,53 +650,58 @@ export default function Vendas() {
                       placeholder="(00) 00000-0000"
                     />
                   </div>
-                  <div className="sm:col-span-2">
-                    <label className="block text-xs font-medium mb-1">Endereço de Entrega</label>
-                    <input
-                      type="text"
-                      value={destinatarioForm.endereco}
-                      onChange={e => setDestinatarioForm(f => ({ ...f, endereco: e.target.value }))}
-                      className="w-full rounded-lg border bg-background px-3 py-2 text-sm"
-                      placeholder="Rua, número, bairro"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium mb-1">Cidade</label>
-                    <input
-                      type="text"
-                      value={destinatarioForm.cidade}
-                      onChange={e => setDestinatarioForm(f => ({ ...f, cidade: e.target.value }))}
-                      className="w-full rounded-lg border bg-background px-3 py-2 text-sm"
-                    />
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <label className="block text-xs font-medium mb-1">UF</label>
-                      <input
-                        type="text"
-                        maxLength={2}
-                        value={destinatarioForm.uf}
-                        onChange={e => setDestinatarioForm(f => ({ ...f, uf: e.target.value.toUpperCase() }))}
-                        className="w-full rounded-lg border bg-background px-3 py-2 text-sm uppercase text-center"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-medium mb-1">CEP</label>
-                      <input
-                        type="text"
-                        value={destinatarioForm.cep}
-                        onChange={e => setDestinatarioForm(f => ({ ...f, cep: e.target.value }))}
-                        className="w-full rounded-lg border bg-background px-3 py-2 text-sm font-mono"
-                      />
-                    </div>
-                  </div>
+
+                  {tipoDocumentoEmissao === 'nfe' && (
+                    <>
+                      <div className="sm:col-span-2">
+                        <label className="block text-xs font-medium mb-1">Endereço de Entrega</label>
+                        <input
+                          type="text"
+                          value={destinatarioForm.endereco}
+                          onChange={e => setDestinatarioForm(f => ({ ...f, endereco: e.target.value }))}
+                          className="w-full rounded-lg border bg-background px-3 py-2 text-sm"
+                          placeholder="Rua, número, bairro"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium mb-1">Cidade</label>
+                        <input
+                          type="text"
+                          value={destinatarioForm.cidade}
+                          onChange={e => setDestinatarioForm(f => ({ ...f, cidade: e.target.value }))}
+                          className="w-full rounded-lg border bg-background px-3 py-2 text-sm"
+                        />
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="block text-xs font-medium mb-1">UF</label>
+                          <input
+                            type="text"
+                            maxLength={2}
+                            value={destinatarioForm.uf}
+                            onChange={e => setDestinatarioForm(f => ({ ...f, uf: e.target.value.toUpperCase() }))}
+                            className="w-full rounded-lg border bg-background px-3 py-2 text-sm uppercase text-center"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium mb-1">CEP</label>
+                          <input
+                            type="text"
+                            value={destinatarioForm.cep}
+                            onChange={e => setDestinatarioForm(f => ({ ...f, cep: e.target.value }))}
+                            className="w-full rounded-lg border bg-background px-3 py-2 text-sm font-mono"
+                          />
+                        </div>
+                      </div>
+                    </>
+                  )}
                 </div>
               </div>
 
               {/* Itens e Totais */}
               <div className="space-y-2 border-t pt-4">
                 <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                  Itens da Nota Fiscal ({itensParaEmitir?.length ?? 0})
+                  Itens a Transmitir ({itensParaEmitir?.length ?? 0})
                 </h3>
                 <div className="max-h-36 overflow-y-auto space-y-1.5 border rounded-lg p-2.5 bg-muted/20 text-xs">
                   {(itensParaEmitir ?? []).map((it, idx) => (
@@ -589,7 +724,9 @@ export default function Vendas() {
                     {vendaParaEmitir.frete_transportadora ? ` (${vendaParaEmitir.frete_transportadora})` : ''}
                   </div>
                   <div className="text-right">
-                    <span className="text-xs text-muted-foreground mr-2">Total da NF-e:</span>
+                    <span className="text-xs text-muted-foreground mr-2">
+                      Total {tipoDocumentoEmissao === 'nfce' ? 'da NFC-e' : 'da NF-e'}:
+                    </span>
                     <span className="text-lg font-bold text-primary">{fmt(vendaParaEmitir.total)}</span>
                   </div>
                 </div>
@@ -609,10 +746,17 @@ export default function Vendas() {
                   type="button"
                   onClick={handleConfirmarEmissao}
                   disabled={emitindo}
-                  className="px-5 py-2 text-sm font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white transition-colors flex items-center gap-2 shadow-sm disabled:opacity-60"
+                  className={cn(
+                    "px-5 py-2 text-sm font-semibold rounded-lg text-white transition-colors flex items-center gap-2 shadow-sm disabled:opacity-60",
+                    tipoDocumentoEmissao === 'nfce' ? "bg-emerald-600 hover:bg-emerald-500" : "bg-primary hover:bg-primary/90"
+                  )}
                 >
-                  {emitindo ? <Loader2 className="animate-spin" size={16} /> : <Send size={16} />}
-                  {emitindo ? 'Transmitindo para a SEFAZ…' : 'Autorizar e Gerar DANFE'}
+                  {emitindo ? <Loader2 className="animate-spin" size={16} /> : (tipoDocumentoEmissao === 'nfce' ? <Receipt size={16} /> : <Send size={16} />)}
+                  {emitindo
+                    ? 'Transmitindo para a SEFAZ…'
+                    : tipoDocumentoEmissao === 'nfce'
+                    ? 'Autorizar e Imprimir Cupom (NFC-e)'
+                    : 'Autorizar e Gerar DANFE (NF-e)'}
                 </button>
               </div>
             </div>
@@ -620,124 +764,21 @@ export default function Vendas() {
         </div>
       )}
 
-      {/* Modal Visualizador de DANFE para Impressão */}
-      {danfeAtivo && (
-        <DanfeModal
+      {/* Modal Visualizador de Documentos Fiscais */}
+      {danfeAtivo && danfeAtivo.resultado.tipo === 'nfce' && (
+        <DanfeNfceModal
           dados={danfeAtivo.dados}
           resultado={danfeAtivo.resultado}
           onClose={() => setDanfeAtivo(null)}
         />
       )}
 
-      {/* Detail Modal da Venda */}
-      {selectedVenda && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setSelectedId(null)} />
-          <div className="relative bg-background rounded-2xl shadow-lg w-full max-w-md animate-fade-in max-h-[80vh] overflow-y-auto">
-            <div className="flex items-center justify-between px-6 py-4 border-b sticky top-0 bg-background rounded-t-2xl z-10">
-              <h2 className="font-bold text-lg">Venda {selectedVenda.numero}</h2>
-              <button onClick={() => setSelectedId(null)} className="p-1.5 rounded-lg hover:bg-muted transition-colors">
-                <X size={18} />
-              </button>
-            </div>
-            <div className="px-6 py-5 space-y-4">
-              <div className="flex justify-between">
-                <div>
-                  <p className="text-xs text-muted-foreground">Cliente</p>
-                  <p className="font-semibold">{selectedVenda.cliente_nome}</p>
-                </div>
-                <div className="text-right">
-                  <p className="text-xs text-muted-foreground">Pagamento</p>
-                  <p className="font-semibold">{selectedVenda.forma_pagamento}</p>
-                </div>
-              </div>
-
-              <div>
-                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Itens</p>
-                <div className="space-y-2">
-                  {(itensDetail ?? []).map(item => (
-                    <div key={item.id} className="flex items-center justify-between py-2 border-b last:border-0">
-                      <div>
-                        <p className="text-sm font-medium">{item.produto_nome}</p>
-                        <p className="text-xs text-muted-foreground">{item.produto_codigo} · {item.quantidade}x {fmt(item.preco_unitario)}</p>
-                      </div>
-                      <p className="font-semibold text-sm">{fmt(item.subtotal)}</p>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {Number(selectedVenda.frete_valor) > 0 && (
-                <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">Frete{selectedVenda.frete_transportadora ? ` (${selectedVenda.frete_transportadora})` : ''}</span>
-                  <span className="font-medium">{fmt(Number(selectedVenda.frete_valor))}</span>
-                </div>
-              )}
-
-              <div className="flex justify-between items-center pt-2 border-t">
-                <span className="font-bold">Total</span>
-                <span className="text-xl font-bold text-primary">{fmt(selectedVenda.total)}</span>
-              </div>
-
-              {/* Seção Fiscal no Modal de Detalhes */}
-              <div className="pt-3 border-t">
-                {(() => {
-                  const nfeRecord = getVendaNFeRecord(selectedVenda.id);
-                  if (nfeRecord?.status === 'autorizada') {
-                    return (
-                      <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-xl space-y-2">
-                        <div className="flex items-center justify-between">
-                          <span className="text-xs font-bold text-emerald-700 dark:text-emerald-400 flex items-center gap-1">
-                            <CheckCircle size={14} /> NF-e Nº {nfeRecord.numero} Autorizada
-                          </span>
-                          <span className="text-[10px] text-muted-foreground font-mono">Série {nfeRecord.serie}</span>
-                        </div>
-                        <p className="text-[10px] font-mono text-muted-foreground break-all">
-                          {nfeRecord.chaveAcesso}
-                        </p>
-                        <div className="flex gap-2 pt-1">
-                          <button
-                            onClick={() => {
-                              setSelectedId(null);
-                              handleAbrirDanfeExistente(selectedVenda, nfeRecord);
-                            }}
-                            className="flex-1 py-1.5 px-3 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors"
-                          >
-                            <Printer size={13} />
-                            Imprimir DANFE
-                          </button>
-                          {nfeRecord.xml && (
-                            <button
-                              onClick={() => baixarXmlNFe(nfeRecord.chaveAcesso, nfeRecord.xml)}
-                              className="py-1.5 px-3 rounded-lg border text-xs font-medium hover:bg-muted flex items-center justify-center gap-1.5 transition-colors"
-                            >
-                              <Download size={13} />
-                              XML
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  }
-
-                  return (
-                    <button
-                      onClick={() => {
-                        setSelectedId(null);
-                        handleAbrirEmissao(selectedVenda);
-                      }}
-                      className="w-full py-2.5 rounded-xl bg-primary text-primary-foreground font-semibold text-xs flex items-center justify-center gap-2 hover:bg-primary/90 transition-colors shadow-sm"
-                    >
-                      <FileText size={15} />
-                      Emitir NF-e desta Venda
-                    </button>
-                  );
-                })()}
-              </div>
-
-            </div>
-          </div>
-        </div>
+      {danfeAtivo && danfeAtivo.resultado.tipo === 'nfe' && (
+        <DanfeModal
+          dados={danfeAtivo.dados}
+          resultado={danfeAtivo.resultado}
+          onClose={() => setDanfeAtivo(null)}
+        />
       )}
     </div>
   );

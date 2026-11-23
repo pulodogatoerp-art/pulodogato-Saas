@@ -1,5 +1,5 @@
 import { useState, useMemo, useRef, useEffect } from 'react';
-import { Search, Plus, Trash2, FileText, MessageCircle, ShoppingCart, User, Package, X, ChevronDown, Eye, Printer, ArrowLeft, Loader2, List, Edit2, CreditCard, QrCode, TrendingUp } from 'lucide-react';
+import { Search, Plus, Trash2, FileText, MessageCircle, ShoppingCart, User, UserCheck, Package, X, ChevronDown, Eye, Printer, ArrowLeft, Loader2, List, Edit2, CreditCard, QrCode, TrendingUp, Receipt } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
@@ -8,6 +8,9 @@ import { cn } from '@/lib/utils';
 import logoMgn from '@/assets/logo-mgn.png';
 import ProdutoModal, { SimulacaoCustoSnapshot } from '@/components/ProdutoModal';
 import BuscaPecasIA from '@/components/BuscaPecasIA';
+import DanfeModal from '@/components/DanfeModal';
+import DanfeNfceModal from '@/components/DanfeNfceModal';
+import { NFeVendaData, NFeResultado, emitirDocumentoFiscal } from '@/services/nfeService';
 
 /* ------------------------------------------------------------------ */
 /* Types                                                               */
@@ -424,6 +427,9 @@ export default function Orcamentos() {
   // New orcamento state
   const [clienteSearch, setClienteSearch] = useState('');
   const [clienteSelecionado, setClienteSelecionado] = useState<ClienteDB | null>(null);
+  const [clienteFechamento, setClienteFechamento] = useState<ClienteDB | null>(null);
+  const [showAlterarCliente, setShowAlterarCliente] = useState(false);
+  const [buscaClienteFechamento, setBuscaClienteFechamento] = useState('');
   const [produtoSearch, setProdutoSearch] = useState('');
   const [itens, setItens] = useState<ItemLocal[]>([]);
   const [desconto, setDesconto] = useState(0);
@@ -460,6 +466,7 @@ export default function Orcamentos() {
   };
 
   const { data: clientes } = useClientes(clienteSearch);
+  const { data: clientesFechamentoList } = useClientes(buscaClienteFechamento);
   const { data: produtos } = useProdutos(produtoSearch);
   const { data: orcamentos, isLoading } = useOrcamentos();
   const { data: itensDetail } = useItensOrcamento(selectedId);
@@ -477,6 +484,19 @@ export default function Orcamentos() {
       return data?.valor ?? '30';
     },
   });
+
+  const { data: configFiscal } = useQuery({
+    queryKey: ['configuracoes-fiscal'],
+    queryFn: async () => {
+      const { data } = await supabase.from('configuracoes').select('chave, valor');
+      const map: Record<string, string> = {};
+      (data ?? []).forEach((r: any) => { map[r.chave] = r.valor; });
+      return map;
+    },
+  });
+
+  const [emissaoFiscal, setEmissaoFiscal] = useState<'nfce' | 'nfe' | 'nenhum'>('nfce');
+  const [danfeAtivo, setDanfeAtivo] = useState<{ dados: NFeVendaData; resultado: NFeResultado } | null>(null);
 
   const { data: categoriasDisponiveis = [] } = useQuery({
     queryKey: ['produtos-categorias'],
@@ -580,21 +600,31 @@ export default function Orcamentos() {
 
   const saveMutation = useMutation({
     mutationFn: async () => {
-      if (!clienteSelecionado || itens.length === 0) throw new Error('Dados incompletos');
+      if (itens.length === 0) throw new Error('Adicione pelo menos uma peça ao orçamento');
+
+      // Se nenhum cliente foi selecionado, assume automaticamente Consumidor Final (Balcão)
+      const clienteAtivo = clienteSelecionado || {
+        id: '00000000-0000-0000-0000-000000000001',
+        nome: 'Consumidor Final (Balcão)',
+        telefone: '',
+        cpf_cnpj: '000.000.000-00',
+        email: '',
+        endereco: 'Balcão da Loja'
+      };
 
       if (editingOrcId) {
         // UPDATE existing orcamento
         const { error: orcErr } = await supabase.from('orcamentos').update({
-          cliente_id: clienteSelecionado.id,
-          cliente_nome: clienteSelecionado.nome,
-          cliente_telefone: clienteSelecionado.telefone,
-          cliente_cpf_cnpj: clienteSelecionado.cpf_cnpj,
+          cliente_id: clienteAtivo.id,
+          cliente_nome: clienteAtivo.nome,
+          cliente_telefone: clienteAtivo.telefone || '',
+          cliente_cpf_cnpj: clienteAtivo.cpf_cnpj || '',
           subtotal,
           desconto,
           total,
           frete_transportadora: freteTransportadora,
           frete_valor: freteValor,
-          simulacoes_custo: simulacoes as any,
+          simulacoes_custo: (simulacoes || []) as any,
         } as any).eq('id', editingOrcId);
         if (orcErr) throw orcErr;
 
@@ -626,10 +656,10 @@ export default function Orcamentos() {
 
         const { data: orc, error: orcErr } = await supabase.from('orcamentos').insert({
           numero,
-          cliente_id: clienteSelecionado.id,
-          cliente_nome: clienteSelecionado.nome,
-          cliente_telefone: clienteSelecionado.telefone,
-          cliente_cpf_cnpj: clienteSelecionado.cpf_cnpj,
+          cliente_id: clienteAtivo.id,
+          cliente_nome: clienteAtivo.nome,
+          cliente_telefone: clienteAtivo.telefone || '',
+          cliente_cpf_cnpj: clienteAtivo.cpf_cnpj || '',
           subtotal,
           desconto,
           total,
@@ -637,7 +667,7 @@ export default function Orcamentos() {
           frete_valor: freteValor,
           created_by: user?.id,
           status: 'pendente',
-          simulacoes_custo: simulacoes as any,
+          simulacoes_custo: (simulacoes || []) as any,
         } as any).select('id').single();
 
         if (orcErr) throw orcErr;
@@ -755,6 +785,7 @@ export default function Orcamentos() {
   const [showWaModal, setShowWaModal] = useState(false);
   const [waNumber, setWaNumber] = useState('');
   const [formaPagamento, setFormaPagamento] = useState('Dinheiro');
+
   const [mpPixData, setMpPixData] = useState<{ qr_code: string; qr_code_base64: string; ticket_url: string; payment_id: string } | null>(null);
   const [mpInstallments, setMpInstallments] = useState<{ installments: number; installment_amount: number; total_amount: number; has_interest: boolean }[]>([]);
   const [mpSelectedInstallment, setMpSelectedInstallment] = useState(1);
@@ -770,12 +801,20 @@ export default function Orcamentos() {
       const seq = (count ?? 0) + 1;
       const numero = `VDA-${new Date().getFullYear()}-${String(seq).padStart(4, '0')}`;
 
+      // Cliente definitivo para a venda (se alterado na hora de fechar)
+      const cliFinalId = clienteFechamento?.id || selectedOrc.cliente_id;
+      const cliFinalNome = clienteFechamento?.nome || selectedOrc.cliente_nome;
+      const cliFinalCpf = clienteFechamento?.cpf_cnpj || selectedOrc.cliente_cpf_cnpj || '';
+      const cliFinalTel = clienteFechamento?.telefone || selectedOrc.cliente_telefone || '';
+
       // 2. Create venda
       const { data: venda, error: vendaErr } = await supabase.from('vendas').insert({
         orcamento_id: selectedOrc.id,
         numero,
-        cliente_id: selectedOrc.cliente_id,
-        cliente_nome: selectedOrc.cliente_nome,
+        cliente_id: cliFinalId,
+        cliente_nome: cliFinalNome,
+        cliente_cpf_cnpj: cliFinalCpf,
+        cliente_telefone: cliFinalTel,
         total: selectedOrc.total,
         forma_pagamento: formaPagamento,
         frete_transportadora: selectedOrc.frete_transportadora,
@@ -784,6 +823,16 @@ export default function Orcamentos() {
       } as any).select('id').single();
 
       if (vendaErr) throw vendaErr;
+
+      // Se o cliente foi substituído no fechamento, atualiza também o orçamento
+      if (clienteFechamento) {
+        await supabase.from('orcamentos').update({
+          cliente_id: clienteFechamento.id,
+          cliente_nome: clienteFechamento.nome,
+          cliente_cpf_cnpj: clienteFechamento.cpf_cnpj,
+          cliente_telefone: clienteFechamento.telefone,
+        } as any).eq('id', selectedOrc.id);
+      }
 
       // 3. Copy items to itens_venda
       const rows = itensDetail.map(i => ({
@@ -818,14 +867,102 @@ export default function Orcamentos() {
         .eq('id', selectedOrc.id);
       if (statusErr) throw statusErr;
 
-      return numero;
+      return {
+        vendaId: venda.id,
+        numero,
+        cliFinalNome,
+        cliFinalCpf,
+        cliFinalTel,
+      };
     },
-    onSuccess: (numero) => {
+    onSuccess: async (dadosVenda: { vendaId: string; numero: string; cliFinalNome: string; cliFinalCpf: string; cliFinalTel: string }) => {
       queryClient.invalidateQueries({ queryKey: ['orcamentos'] });
       queryClient.invalidateQueries({ queryKey: ['vendas'] });
       queryClient.invalidateQueries({ queryKey: ['produtos-search'] });
       setShowFinalizarModal(false);
-      toast({ title: `Venda ${numero} finalizada com sucesso!`, description: 'Estoque atualizado automaticamente.' });
+
+      if (emissaoFiscal !== 'nenhum' && selectedOrc && itensDetail) {
+        try {
+          const isNfce = emissaoFiscal === 'nfce';
+          const serie = isNfce ? (configFiscal?.['nfce_serie'] || '1') : (configFiscal?.['nfe_serie'] || '1');
+          const proximoNum = parseInt(isNfce ? (configFiscal?.['nfce_proximo_numero'] || '1') : (configFiscal?.['nfe_proximo_numero'] || '1'), 10);
+          const ambiente = (configFiscal?.['nfe_ambiente'] || 'homologacao') as 'homologacao' | 'producao';
+          const natOp = isNfce ? 'VENDA AO CONSUMIDOR' : (configFiscal?.['nfe_natureza_operacao'] || 'Venda de mercadoria adquirida de terceiros');
+          const cfopPadrao = configFiscal?.['nfe_cfop_padrao'] || '5102';
+
+          const docData: NFeVendaData = {
+            vendaId: dadosVenda.vendaId,
+            vendaNumero: dadosVenda.numero,
+            dataEmissao: new Date(),
+            naturezaOperacao: natOp,
+            serie,
+            numero: proximoNum,
+            modelo: isNfce ? '65' : '55',
+            tipo: emissaoFiscal,
+            ambiente,
+            formaPagamento,
+            freteModalidade: Number(selectedOrc.frete_valor) > 0 ? 0 : 9,
+            freteTransportadora: selectedOrc.frete_transportadora,
+            freteValor: Number(selectedOrc.frete_valor) || 0,
+            totalProdutos: itensDetail.reduce((acc, it) => acc + Number(it.subtotal), 0),
+            totalVenda: Number(selectedOrc.total),
+            cscId: configFiscal?.['nfce_id_csc'] || '000001',
+            cscToken: configFiscal?.['nfce_csc'] || '',
+            emitente: {
+              cnpj: configFiscal?.['empresa_cnpj'] || '',
+              razaoSocial: configFiscal?.['empresa_nome'] || (empresa as any)?.empresa_nome || 'Autopeças MGN',
+              ie: configFiscal?.['empresa_ie'] || (empresa as any)?.empresa_ie || 'ISENTO',
+              endereco: configFiscal?.['empresa_endereco'] || (empresa as any)?.empresa_endereco || 'Rua Principal',
+              cidade: configFiscal?.['empresa_cidade'] || 'Campo Grande',
+              uf: configFiscal?.['empresa_uf'] || 'MS',
+              cep: configFiscal?.['empresa_cep'] || '79000-000',
+              telefone: configFiscal?.['empresa_telefone'] || (empresa as any)?.empresa_telefone || '',
+              email: configFiscal?.['empresa_email'] || '',
+              regimeTributario: configFiscal?.['nfe_regime_tributario'] || '1',
+            },
+            destinatario: {
+              nome: dadosVenda.cliFinalNome || 'CONSUMIDOR FINAL',
+              cpfCnpj: dadosVenda.cliFinalCpf,
+              endereco: 'Logradouro principal',
+              bairro: 'Centro',
+              cidade: configFiscal?.['empresa_cidade'] || 'Campo Grande',
+              uf: configFiscal?.['empresa_uf'] || 'MS',
+              cep: '79000-000',
+              telefone: dadosVenda.cliFinalTel,
+            },
+            itens: itensDetail.map((it, idx) => ({
+              id: it.id,
+              codigo: it.produto_codigo || `COD-${idx + 1}`,
+              descricao: it.produto_nome,
+              ncm: '87082999',
+              cfop: cfopPadrao,
+              unidade: 'UN',
+              quantidade: it.quantidade,
+              valorUnitario: Number(it.preco_unitario),
+              valorTotal: Number(it.subtotal),
+              icmsAliquota: Number(configFiscal?.['icms_percentual'] || 17),
+              pisAliquota: Number(configFiscal?.['pis_percentual'] || 1.65),
+              cofinsAliquota: Number(configFiscal?.['cofins_percentual'] || 7.6),
+            })),
+          };
+
+          const resultado = await emitirDocumentoFiscal(docData, configFiscal?.['nfe_focus_token']);
+          setDanfeAtivo({ dados: docData, resultado });
+          toast({
+            title: isNfce ? `Venda ${dadosVenda.numero} finalizada e NFC-e emitida!` : `Venda ${dadosVenda.numero} finalizada e NF-e emitida!`,
+            description: 'Documento fiscal pronto para impressão.',
+          });
+          return;
+        } catch (err: any) {
+          toast({
+            title: `Venda ${dadosVenda.numero} finalizada, mas houve aviso na emissão fiscal`,
+            description: err.message,
+            variant: 'destructive',
+          });
+        }
+      }
+
+      toast({ title: `Venda ${dadosVenda.numero} finalizada com sucesso!`, description: 'Estoque atualizado automaticamente.' });
     },
     onError: (e: any) => {
       toast({ title: 'Erro ao finalizar venda', description: e.message, variant: 'destructive' });
@@ -1182,10 +1319,80 @@ export default function Orcamentos() {
                 </button>
               </div>
               <div className="px-6 py-5 space-y-4">
-                <div>
-                  <p className="text-sm text-muted-foreground">Cliente</p>
-                  <p className="font-semibold">{selectedOrc.cliente_nome}</p>
+                <div className="rounded-xl border bg-muted/30 p-3.5 space-y-2.5">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Cliente da Venda</p>
+                      <p className="font-semibold text-foreground text-sm flex items-center gap-1.5 mt-0.5">
+                        <User size={15} className="text-primary" />
+                        {clienteFechamento?.nome || selectedOrc.cliente_nome}
+                      </p>
+                      {(clienteFechamento?.cpf_cnpj || selectedOrc.cliente_cpf_cnpj) && (
+                        <p className="text-xs text-muted-foreground mt-0.5">
+                          CPF/CNPJ: {clienteFechamento?.cpf_cnpj || selectedOrc.cliente_cpf_cnpj}
+                        </p>
+                      )}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setShowAlterarCliente(v => !v)}
+                      className="text-xs font-semibold px-2.5 py-1.5 rounded-lg border border-primary/30 text-primary hover:bg-primary/10 transition-colors whitespace-nowrap"
+                    >
+                      {showAlterarCliente ? 'Cancelar' : 'Substituir Cliente'}
+                    </button>
+                  </div>
+
+                  {showAlterarCliente && (
+                    <div className="pt-2 border-t space-y-2">
+                      <p className="text-xs text-muted-foreground">
+                        Buscar cliente cadastrado para registrar a venda no nome dele:
+                      </p>
+                      <div className="relative">
+                        <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                        <input
+                          type="text"
+                          value={buscaClienteFechamento}
+                          onChange={e => setBuscaClienteFechamento(e.target.value)}
+                          placeholder="Buscar por nome ou CPF/CNPJ..."
+                          className="w-full rounded-lg border bg-background pl-8 pr-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-primary/40"
+                          autoFocus
+                        />
+                      </div>
+                      {clientesFechamentoList && clientesFechamentoList.length > 0 && (
+                        <div className="border rounded-lg max-h-36 overflow-y-auto divide-y bg-background text-xs shadow-sm">
+                          {clientesFechamentoList.map(c => (
+                            <button
+                              key={c.id}
+                              type="button"
+                              onClick={() => {
+                                setClienteFechamento(c);
+                                setShowAlterarCliente(false);
+                                setBuscaClienteFechamento('');
+                              }}
+                              className="w-full text-left px-3 py-2 hover:bg-muted/80 flex items-center justify-between transition-colors"
+                            >
+                              <span className="font-medium text-foreground">{c.nome}</span>
+                              <span className="text-[11px] text-muted-foreground">{c.cpf_cnpj || c.telefone || ''}</span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                      {clienteFechamento && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setClienteFechamento(null);
+                            setShowAlterarCliente(false);
+                          }}
+                          className="text-[11px] text-destructive hover:underline block"
+                        >
+                          Restaurar cliente original ({selectedOrc.cliente_nome})
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </div>
+
                 <div>
                   <p className="text-sm text-muted-foreground">Total</p>
                   <p className="text-2xl font-bold text-primary">{fmt(selectedOrc.total)}</p>
@@ -1223,6 +1430,56 @@ export default function Orcamentos() {
                       <option key={f}>{f}</option>
                     ))}
                   </select>
+                </div>
+
+                {/* Opções de Emissão Fiscal */}
+                <div className="rounded-xl border border-primary/20 bg-primary/5 p-3.5 space-y-2">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-primary flex items-center gap-1.5">
+                    <Receipt size={14} /> Emissão Fiscal no Fechamento
+                  </p>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                    <label className={cn(
+                      "flex items-center gap-2 p-2 rounded-lg border text-xs cursor-pointer transition-colors",
+                      emissaoFiscal === 'nfce' ? "border-emerald-500 bg-emerald-500/10 font-semibold text-emerald-800 dark:text-emerald-300" : "hover:bg-muted"
+                    )}>
+                      <input
+                        type="radio"
+                        name="emissaoFiscal"
+                        checked={emissaoFiscal === 'nfce'}
+                        onChange={() => setEmissaoFiscal('nfce')}
+                        className="accent-emerald-600"
+                      />
+                      <span>🧾 Cupom (NFC-e)</span>
+                    </label>
+
+                    <label className={cn(
+                      "flex items-center gap-2 p-2 rounded-lg border text-xs cursor-pointer transition-colors",
+                      emissaoFiscal === 'nfe' ? "border-primary bg-primary/10 font-semibold text-primary" : "hover:bg-muted"
+                    )}>
+                      <input
+                        type="radio"
+                        name="emissaoFiscal"
+                        checked={emissaoFiscal === 'nfe'}
+                        onChange={() => setEmissaoFiscal('nfe')}
+                        className="accent-primary"
+                      />
+                      <span>📄 NF-e (A4)</span>
+                    </label>
+
+                    <label className={cn(
+                      "flex items-center gap-2 p-2 rounded-lg border text-xs cursor-pointer transition-colors",
+                      emissaoFiscal === 'nenhum' ? "border-muted-foreground/40 bg-muted font-semibold" : "hover:bg-muted"
+                    )}>
+                      <input
+                        type="radio"
+                        name="emissaoFiscal"
+                        checked={emissaoFiscal === 'nenhum'}
+                        onChange={() => setEmissaoFiscal('nenhum')}
+                        className="accent-muted-foreground"
+                      />
+                      <span>Não emitir</span>
+                    </label>
+                  </div>
                 </div>
 
                 {/* MercadoPago Pix - Generate QR Code */}
@@ -1471,9 +1728,26 @@ export default function Orcamentos() {
         <div className="xl:col-span-2 space-y-4">
           {/* Cliente */}
           <div className="rounded-xl border bg-card shadow-sm p-5">
-            <div className="flex items-center gap-2 mb-4">
-              <User size={16} className="text-primary" />
-              <h2 className="font-semibold text-sm">Cliente</h2>
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-2">
+                <User size={16} className="text-primary" />
+                <h2 className="font-semibold text-sm">Cliente</h2>
+              </div>
+              <button
+                type="button"
+                onClick={() => setClienteSelecionado({
+                  id: '00000000-0000-0000-0000-000000000001',
+                  nome: 'Consumidor Final (Balcão)',
+                  cpf_cnpj: '000.000.000-00',
+                  telefone: '',
+                  email: '',
+                  endereco: 'Balcão da Loja'
+                })}
+                className="text-xs px-2.5 py-1 rounded-lg border border-primary/40 text-primary hover:bg-primary/10 transition-colors font-semibold flex items-center gap-1.5"
+              >
+                <UserCheck size={13} />
+                Usar Consumidor Final
+              </button>
             </div>
             {clienteSelecionado ? (
               <div className="flex items-center justify-between rounded-lg bg-primary/10 px-4 py-3">
@@ -1755,7 +2029,7 @@ export default function Orcamentos() {
             <div className="space-y-2 pt-4">
               <button
                 onClick={() => saveMutation.mutate()}
-                disabled={!clienteSelecionado || itens.length === 0 || saveMutation.isPending}
+                disabled={itens.length === 0 || saveMutation.isPending}
                 className="w-full flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold text-primary-foreground shadow-sm transition-all hover:opacity-90 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed bg-primary"
               >
                 {saveMutation.isPending ? (
@@ -1766,11 +2040,15 @@ export default function Orcamentos() {
               </button>
             </div>
 
-            {(!clienteSelecionado || itens.length === 0) && (
+            {itens.length === 0 ? (
               <p className="text-xs text-muted-foreground text-center mt-3">
-                {!clienteSelecionado ? 'Selecione um cliente para continuar' : 'Adicione pelo menos uma peça'}
+                Adicione pelo menos uma peça para salvar o orçamento
               </p>
-            )}
+            ) : !clienteSelecionado ? (
+              <p className="text-[11px] text-muted-foreground text-center mt-3">
+                Nenhum cliente selecionado: salvará como <strong>Consumidor Final (Balcão)</strong>
+              </p>
+            ) : null}
           </div>
         </div>
       </div>
@@ -1829,6 +2107,23 @@ export default function Orcamentos() {
           customCategorias={categoriasDisponiveis}
           onSaveSimulacao={role === 'admin' ? (snap) => setSimulacoes(s => [...s, snap]) : undefined}
           orcamentoLabel={editingOrcId ? 'edição' : 'novo'}
+        />
+      )}
+
+      {/* Modais de Impressão Fiscal */}
+      {danfeAtivo && danfeAtivo.resultado.tipo === 'nfce' && (
+        <DanfeNfceModal
+          dados={danfeAtivo.dados}
+          resultado={danfeAtivo.resultado}
+          onClose={() => setDanfeAtivo(null)}
+        />
+      )}
+
+      {danfeAtivo && danfeAtivo.resultado.tipo === 'nfe' && (
+        <DanfeModal
+          dados={danfeAtivo.dados}
+          resultado={danfeAtivo.resultado}
+          onClose={() => setDanfeAtivo(null)}
         />
       )}
     </div>
