@@ -256,11 +256,16 @@ export default function ProdutoModal({
     const freteCustoNum = parseFloat(form.freteCusto) || 0;
     const custoTotal = precoCustoNum + freteCustoNum;
 
+    const codFab = form.codigoFabrica.trim();
+    const codPrincipal = produto?.codigo || codFab || `PRD-${Date.now().toString().slice(-6)}`;
+
     onSave({
-      codigo_fabrica: form.codigoFabrica.trim(),
+      codigo: codPrincipal,
+      codigo_fabrica: codFab,
+      codigo_interno: produto?.codigo_interno || '',
       nome: form.nome.trim(),
-      marca: form.marca.trim(),
-      aplicacao: form.aplicacao.trim(),
+      marca: form.marca.trim() || 'Geral',
+      aplicacao: form.aplicacao.trim() || 'A definir / Consultar catálogo',
       ncm: form.ncm.trim(),
       preco_venda: parseFloat(form.precoVenda) || 0,
       markup_percentual: parseFloat(form.markup) || 0,

@@ -227,23 +227,30 @@ export default function Produtos() {
     marcaFiltro !== 'Todas' ||
     modeloFiltro.trim().length > 0;
 
-  // Filtragem rápida de produtos
+  // Filtragem rápida de produtos com proteção contra valores nulos
   const produtos = useMemo(() => {
     return allProdutos.filter((p: ProdutoDB) => {
-      const q = search.toLowerCase();
+      const q = search.trim().toLowerCase();
+      const nome = (p.nome || '').toLowerCase();
+      const codFab = (p.codigo_fabrica || '').toLowerCase();
+      const codInt = (p.codigo_interno || '').toLowerCase();
+      const cod = (p.codigo || '').toLowerCase();
+      const aplicacao = (p.aplicacao || '').toLowerCase();
+      const marca = (p.marca || '').toLowerCase();
+
       const matchSearch =
         !q ||
-        p.nome.toLowerCase().includes(q) ||
-        (p.codigo_fabrica || '').toLowerCase().includes(q) ||
-        (p.codigo_interno || '').toLowerCase().includes(q) ||
-        (p.codigo || '').toLowerCase().includes(q) ||
-        p.aplicacao.toLowerCase().includes(q) ||
-        p.marca.toLowerCase().includes(q);
+        nome.includes(q) ||
+        codFab.includes(q) ||
+        codInt.includes(q) ||
+        cod.includes(q) ||
+        aplicacao.includes(q) ||
+        marca.includes(q);
       const matchCat = categoria === 'Todos' || p.categoria === categoria;
       const matchTipo = tipoVeic === 'Todos' || p.tipo_veiculo === tipoVeic;
       const matchMarca = marcaFiltro === 'Todas' || p.marca === marcaFiltro;
       const m = modeloFiltro.trim().toLowerCase();
-      const matchModelo = !m || p.aplicacao.toLowerCase().includes(m);
+      const matchModelo = !m || aplicacao.includes(m);
       return matchSearch && matchCat && matchTipo && matchMarca && matchModelo;
     });
   }, [search, categoria, tipoVeic, marcaFiltro, modeloFiltro, allProdutos]);

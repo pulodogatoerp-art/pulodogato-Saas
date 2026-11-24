@@ -7,7 +7,8 @@ import {
   Layers, AlertOctagon, ExternalLink, X
 } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useNavigate } from 'react-router-dom';
 import { useToast } from '@/hooks/use-toast';
 import { cn } from '@/lib/utils';
 import ProdutoModal, { ProdutoModalData } from '@/components/ProdutoModal';
@@ -118,6 +119,8 @@ function parseNFeXML(xmlText: string): NFeData {
 }
 
 export default function ImportarNFe({ defaultTab = 'entrada' }: { defaultTab?: 'entrada' | 'historico' }) {
+  const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const [tabPrincipal, setTabPrincipal] = useState<'entrada' | 'historico'>(defaultTab);
   const [metodo, setMetodo] = useState<MetodoEntrada>('chave');
   const [status, setStatus] = useState<ImportStatus>('idle');
@@ -334,10 +337,22 @@ export default function ImportarNFe({ defaultTab = 'entrada' }: { defaultTab?: '
       const index = itemParaCadastrar.index;
       delete data._lote;
 
+      const codItem = (data.codigo || data.codigo_fabrica || item.cProd || `PRD-${Date.now().toString().slice(-6)}`).trim();
+
       // Define o estoque total inicial com a quantidade exata da nota fiscal
       const payload = {
+        codigo: codItem,
+        codigo_fabrica: (data.codigo_fabrica || codItem).trim(),
+        codigo_interno: (data.codigo_interno || '').trim(),
         ...data,
-        estoque_total: item.qCom,
+        marca: (data.marca || nfeData.emitenteNome || 'Geral').trim(),
+        aplicacao: (data.aplicacao || 'A definir / Consultar catálogo').trim(),
+        categoria: data.categoria || 'Geral',
+        tipo_veiculo: data.tipo_veiculo || 'Carro',
+        estoque_total: Number(item.qCom || 0),
+        estoque_minimo: Number(data.estoque_minimo || 0),
+        markup_percentual: Number(data.markup_percentual || 50),
+        localizacao: data.localizacao || 'Corredor A-Prateleira 01-G-01',
       };
 
       const { data: inserted, error: prodErr } = await (supabase as any)
@@ -372,6 +387,11 @@ export default function ImportarNFe({ defaultTab = 'entrada' }: { defaultTab?: '
         };
         return copy;
       });
+
+      // Invalida cache de produtos no React Query para aparecer imediatamente em /produtos
+      queryClient.invalidateQueries({ queryKey: ['produtos'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard-produtos'] });
+      queryClient.invalidateQueries({ queryKey: ['lotes'] });
 
       toast({
         title: 'Produto cadastrado com compatibilidade!',
@@ -436,38 +456,67 @@ export default function ImportarNFe({ defaultTab = 'entrada' }: { defaultTab?: '
             .from('produtos')
             .update({
               estoque_total: novoEstoque,
-              icms_percentual: item.pICMS,
-              ipi_percentual: item.pIPI,
-              pis_percentual: item.pPIS,
-              cofins_percentual: item.pCOFINS,
+              icms_percentual: item.pICMS || 0,
+              ipi_percentual: item.pIPI || 0,
+              pis_percentual: item.pPIS || 0,
+              cofins_percentual: item.pCOFINS || 0,
               updated_at: new Date().toISOString(),
             })
             .eq('id', produtoId);
         } else if (nfeData.tipo === 'entrada') {
-          // Se não foi cadastrado manualmente com compatibilidade, cadastra automático com dados da nota
-          const { data: novoProd, error: insertErr } = await (supabase as any)
+          // Verifica se já existe por código antes de inserir para evitar violação de UNIQUE constraint
+          const codItem = (item.cProd || `PRD-${Date.now().toString().slice(-6)}`).trim();
+          const { data: prodJaExiste } = await (supabase as any)
             .from('produtos')
-            .insert({
-              codigo: item.cProd,
-              codigo_fabrica: item.cProd,
-              nome: item.xProd,
-              ncm: item.ncm,
-              marca: nfeData.emitenteNome,
-              aplicacao: 'A definir / Consultar compatibilidade',
-              categoria: 'Geral',
-              tipo_veiculo: 'Carro',
-              estoque_total: item.qCom,
-              preco_venda: Math.round(item.vUnCom * 1.5 * 100) / 100,
-              icms_percentual: item.pICMS,
-              ipi_percentual: item.pIPI,
-              pis_percentual: item.pPIS,
-              cofins_percentual: item.pCOFINS,
-            })
-            .select('id')
-            .single();
+            .select('id, estoque_total')
+            .or(`codigo.eq.${codItem},codigo_fabrica.eq.${codItem}`)
+            .maybeSingle();
 
-          if (insertErr) throw insertErr;
-          produtoId = (novoProd as any).id;
+          if (prodJaExiste) {
+            produtoId = prodJaExiste.id;
+            const estoquePrevio = Number(prodJaExiste.estoque_total || 0);
+            const novoEstoque = estoquePrevio + item.qCom;
+            await (supabase as any)
+              .from('produtos')
+              .update({
+                estoque_total: novoEstoque,
+                icms_percentual: item.pICMS || 0,
+                ipi_percentual: item.pIPI || 0,
+                pis_percentual: item.pPIS || 0,
+                cofins_percentual: item.pCOFINS || 0,
+                updated_at: new Date().toISOString(),
+              })
+              .eq('id', produtoId);
+          } else {
+            // Se não foi cadastrado manualmente com compatibilidade, cadastra automático com dados da nota
+            const { data: novoProd, error: insertErr } = await (supabase as any)
+              .from('produtos')
+              .insert({
+                codigo: codItem,
+                codigo_fabrica: codItem,
+                codigo_interno: '',
+                nome: item.xProd.trim(),
+                ncm: item.ncm || '',
+                marca: nfeData.emitenteNome || 'Geral',
+                aplicacao: 'A definir / Consultar compatibilidade',
+                categoria: 'Geral',
+                tipo_veiculo: 'Carro',
+                estoque_total: item.qCom,
+                estoque_minimo: 0,
+                preco_venda: Math.round(item.vUnCom * 1.5 * 100) / 100,
+                markup_percentual: 50,
+                localizacao: 'Corredor A-Prateleira 01-G-01',
+                icms_percentual: item.pICMS || 0,
+                ipi_percentual: item.pIPI || 0,
+                pis_percentual: item.pPIS || 0,
+                cofins_percentual: item.pCOFINS || 0,
+              })
+              .select('id')
+              .single();
+
+            if (insertErr) throw insertErr;
+            produtoId = (novoProd as any).id;
+          }
         } else {
           continue;
         }
@@ -475,7 +524,7 @@ export default function ImportarNFe({ defaultTab = 'entrada' }: { defaultTab?: '
         if (nfeData.tipo === 'entrada') {
           await (supabase as any).from('lotes').insert({
             produto_id: produtoId,
-            fornecedor: nfeData.emitenteNome,
+            fornecedor: nfeData.emitenteNome || '—',
             preco_custo: item.vUnCom,
             quantidade: item.qCom,
             data_entrada: nfeData.dataEmissao || new Date().toISOString(),
@@ -502,6 +551,12 @@ export default function ImportarNFe({ defaultTab = 'entrada' }: { defaultTab?: '
         xml_raw: xmlText,
         imported_by: user?.id,
       });
+
+      // Invalida cache de produtos no React Query para aparecer imediatamente em /produtos e no balcão!
+      queryClient.invalidateQueries({ queryKey: ['produtos'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard-produtos'] });
+      queryClient.invalidateQueries({ queryKey: ['lotes'] });
+      queryClient.invalidateQueries({ queryKey: ['nfe_importadas'] });
 
       setImportedCount(processados);
       setStatus('done');
@@ -1145,13 +1200,33 @@ export default function ImportarNFe({ defaultTab = 'entrada' }: { defaultTab?: '
               {importedCount} item(ns) processado(s), lotes de entrada gerados e estoque atualizado.
             </p>
           </div>
-          <button
-            type="button"
-            onClick={reset}
-            className="btn-primary px-5 py-2.5 rounded-lg text-sm font-semibold"
-          >
-            Importar Outra Nota Fiscal
-          </button>
+          <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
+            <button
+              type="button"
+              onClick={() => navigate('/produtos')}
+              className="btn-primary px-5 py-2.5 rounded-lg text-sm font-semibold flex items-center gap-2 shadow-sm"
+            >
+              <Package size={16} /> Ver Produtos no Estoque
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                reset();
+                setTabPrincipal('historico');
+                refetchHistorico();
+              }}
+              className="px-5 py-2.5 rounded-lg border text-sm font-semibold hover:bg-muted transition-colors flex items-center gap-2"
+            >
+              <History size={16} /> Grade de Custos da Nota
+            </button>
+            <button
+              type="button"
+              onClick={reset}
+              className="px-4 py-2.5 rounded-lg border text-sm font-semibold text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+            >
+              Importar Outra Nota Fiscal
+            </button>
+          </div>
         </div>
       )}
 
