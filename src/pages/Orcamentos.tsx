@@ -92,7 +92,23 @@ function useOrcamentos() {
         .select('*')
         .order('created_at', { ascending: false });
       if (error) throw error;
-      return (data ?? []) as OrcamentoDB[];
+      return (data ?? []).map((row: any) => {
+        let meta: any = {};
+        if (row.observacoes && typeof row.observacoes === 'string') {
+          try {
+            if (row.observacoes.trim().startsWith('{')) {
+              meta = JSON.parse(row.observacoes);
+            }
+          } catch {}
+        }
+        return {
+          ...row,
+          cliente_cpf_cnpj: row.cliente_cpf_cnpj || meta.cliente_cpf_cnpj || '',
+          cliente_telefone: row.cliente_telefone || meta.cliente_telefone || '',
+          simulacoes_custo: row.simulacoes_custo || meta.simulacoes_custo || [],
+          observacoes: meta.__meta ? (meta.user_obs || '') : (row.observacoes || ''),
+        } as OrcamentoDB;
+      });
     },
   });
 }
@@ -604,7 +620,7 @@ export default function Orcamentos() {
 
       // Se nenhum cliente foi selecionado, assume automaticamente Consumidor Final (Balcão)
       const clienteAtivo = clienteSelecionado || {
-        id: '00000000-0000-0000-0000-000000000001',
+        id: '',
         nome: 'Consumidor Final (Balcão)',
         telefone: '',
         cpf_cnpj: '000.000.000-00',
@@ -612,20 +628,34 @@ export default function Orcamentos() {
         endereco: 'Balcão da Loja'
       };
 
+      // Validar se cliente_id é um UUID válido no banco (evita erro de FK com ID falso)
+      const validClienteId = (clienteAtivo.id && clienteAtivo.id !== '00000000-0000-0000-0000-000000000001') 
+        ? clienteAtivo.id 
+        : null;
+
+      // Armazena dados extras de forma resiliente dentro de observacoes como metadados JSON
+      // Isso previne erro de schema cache caso as colunas 'cliente_cpf_cnpj' ou 'simulacoes_custo' não existam na tabela
+      const observacoesMetadata = JSON.stringify({
+        __meta: true,
+        cliente_cpf_cnpj: clienteAtivo.cpf_cnpj || '',
+        cliente_telefone: clienteAtivo.telefone || '',
+        simulacoes_custo: simulacoes || [],
+      });
+
+      const orcamentoPayload: any = {
+        cliente_id: validClienteId,
+        cliente_nome: clienteAtivo.nome,
+        subtotal,
+        desconto,
+        total,
+        frete_transportadora: freteTransportadora || '',
+        frete_valor: freteValor || 0,
+        observacoes: observacoesMetadata,
+      };
+
       if (editingOrcId) {
         // UPDATE existing orcamento
-        const { error: orcErr } = await supabase.from('orcamentos').update({
-          cliente_id: clienteAtivo.id,
-          cliente_nome: clienteAtivo.nome,
-          cliente_telefone: clienteAtivo.telefone || '',
-          cliente_cpf_cnpj: clienteAtivo.cpf_cnpj || '',
-          subtotal,
-          desconto,
-          total,
-          frete_transportadora: freteTransportadora,
-          frete_valor: freteValor,
-          simulacoes_custo: (simulacoes || []) as any,
-        } as any).eq('id', editingOrcId);
+        const { error: orcErr } = await supabase.from('orcamentos').update(orcamentoPayload).eq('id', editingOrcId);
         if (orcErr) throw orcErr;
 
         // Delete old items and re-insert
@@ -655,20 +685,11 @@ export default function Orcamentos() {
         const numero = `ORC-${new Date().getFullYear()}-${String(seq).padStart(4, '0')}`;
 
         const { data: orc, error: orcErr } = await supabase.from('orcamentos').insert({
+          ...orcamentoPayload,
           numero,
-          cliente_id: clienteAtivo.id,
-          cliente_nome: clienteAtivo.nome,
-          cliente_telefone: clienteAtivo.telefone || '',
-          cliente_cpf_cnpj: clienteAtivo.cpf_cnpj || '',
-          subtotal,
-          desconto,
-          total,
-          frete_transportadora: freteTransportadora,
-          frete_valor: freteValor,
           created_by: user?.id,
           status: 'pendente',
-          simulacoes_custo: (simulacoes || []) as any,
-        } as any).select('id').single();
+        }).select('id').single();
 
         if (orcErr) throw orcErr;
 
@@ -803,34 +824,44 @@ export default function Orcamentos() {
 
       // Cliente definitivo para a venda (se alterado na hora de fechar)
       const cliFinalId = clienteFechamento?.id || selectedOrc.cliente_id;
+      const validCliFinalId = (cliFinalId && cliFinalId !== '00000000-0000-0000-0000-000000000001') ? cliFinalId : null;
       const cliFinalNome = clienteFechamento?.nome || selectedOrc.cliente_nome;
-      const cliFinalCpf = clienteFechamento?.cpf_cnpj || selectedOrc.cliente_cpf_cnpj || '';
-      const cliFinalTel = clienteFechamento?.telefone || selectedOrc.cliente_telefone || '';
 
-      // 2. Create venda
+      // 2. Create venda - usa apenas colunas padrão da tabela vendas no Supabase
       const { data: venda, error: vendaErr } = await supabase.from('vendas').insert({
         orcamento_id: selectedOrc.id,
         numero,
-        cliente_id: cliFinalId,
+        cliente_id: validCliFinalId,
         cliente_nome: cliFinalNome,
-        cliente_cpf_cnpj: cliFinalCpf,
-        cliente_telefone: cliFinalTel,
         total: selectedOrc.total,
         forma_pagamento: formaPagamento,
-        frete_transportadora: selectedOrc.frete_transportadora,
-        frete_valor: selectedOrc.frete_valor,
+        frete_transportadora: selectedOrc.frete_transportadora || '',
+        frete_valor: selectedOrc.frete_valor || 0,
         created_by: user?.id,
       } as any).select('id').single();
 
       if (vendaErr) throw vendaErr;
 
-      // Se o cliente foi substituído no fechamento, atualiza também o orçamento
+      // Se o cliente foi substituído no fechamento, atualiza também o orçamento de forma segura
       if (clienteFechamento) {
+        let metaExistente: any = {};
+        try {
+          if (selectedOrc.observacoes && typeof selectedOrc.observacoes === 'string' && selectedOrc.observacoes.trim().startsWith('{')) {
+            metaExistente = JSON.parse(selectedOrc.observacoes);
+          }
+        } catch {}
+
+        const obsAtualizada = JSON.stringify({
+          ...metaExistente,
+          __meta: true,
+          cliente_cpf_cnpj: clienteFechamento.cpf_cnpj || '',
+          cliente_telefone: clienteFechamento.telefone || '',
+        });
+
         await supabase.from('orcamentos').update({
-          cliente_id: clienteFechamento.id,
+          cliente_id: (clienteFechamento.id && clienteFechamento.id !== '00000000-0000-0000-0000-000000000001') ? clienteFechamento.id : null,
           cliente_nome: clienteFechamento.nome,
-          cliente_cpf_cnpj: clienteFechamento.cpf_cnpj,
-          cliente_telefone: clienteFechamento.telefone,
+          observacoes: obsAtualizada,
         } as any).eq('id', selectedOrc.id);
       }
 

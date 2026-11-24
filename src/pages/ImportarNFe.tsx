@@ -2,12 +2,13 @@ import { useState, useRef, useEffect, useMemo } from 'react';
 import {
   Upload, FileText, CheckCircle, AlertTriangle, XCircle, Loader2,
   Package, PlusCircle, ArrowUpCircle, Key, DownloadCloud, Search,
-  RefreshCw, Copy, CheckCircle2, ShieldCheck, Landmark
+  RefreshCw, Copy, CheckCircle2, ShieldCheck, Landmark, Plus, Wrench
 } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useQuery } from '@tanstack/react-query';
 import { useToast } from '@/hooks/use-toast';
 import { cn } from '@/lib/utils';
+import ProdutoModal, { ProdutoModalData } from '@/components/ProdutoModal';
 import {
   decodificarChaveAcesso,
   formatarChave44,
@@ -46,8 +47,11 @@ interface NFeItem {
 interface ItemAcao {
   acao: 'criar' | 'atualizar' | 'ignorar';
   produtoId?: string;
+  produtoNome?: string;
+  aplicacao?: string;
   estoqueAtual?: number;
   estoqueNovo?: number;
+  jaCadastradoNesteLote?: boolean;
 }
 
 type ImportStatus = 'idle' | 'parsing' | 'preview' | 'importing' | 'done' | 'error' | 'duplicate';
@@ -124,6 +128,8 @@ export default function ImportarNFe() {
   const [chaveInput, setChaveInput] = useState('');
   const [listaDFe, setListaDFe] = useState<NotaRecebidaDFe[]>([]);
   const [carregandoDFe, setCarregandoDFe] = useState(false);
+  const [itemParaCadastrar, setItemParaCadastrar] = useState<{ item: NFeItem; index: number } | null>(null);
+  const [savingModal, setSavingModal] = useState(false);
 
   const fileRef = useRef<HTMLInputElement>(null);
   const { toast } = useToast();
@@ -252,22 +258,34 @@ export default function ImportarNFe() {
           result.push({ acao: 'ignorar' });
           continue;
         }
+
+        // Procura no catálogo por código da nota ou código de fábrica
         const { data: prod } = await (supabase as any)
           .from('produtos')
-          .select('id, estoque_total')
-          .eq('codigo', item.cProd)
+          .select('id, nome, aplicacao, estoque_total')
+          .or(`codigo.eq.${item.cProd},codigo_fabrica.eq.${item.cProd}`)
           .maybeSingle();
+
         if (prod) {
           const delta = nfeData.tipo === 'entrada' ? item.qCom : -item.qCom;
-          const novo = Math.max(0, ((prod as any).estoque_total ?? 0) + delta);
+          const estoqueAtual = Number((prod as any).estoque_total ?? 0);
+          const estoqueNovo = Math.max(0, estoqueAtual + delta);
           result.push({
             acao: 'atualizar',
             produtoId: (prod as any).id,
-            estoqueAtual: (prod as any).estoque_total ?? 0,
-            estoqueNovo: novo,
+            produtoNome: (prod as any).nome,
+            aplicacao: (prod as any).aplicacao,
+            estoqueAtual,
+            estoqueNovo,
+            jaCadastradoNesteLote: false,
           });
         } else if (nfeData.tipo === 'entrada') {
-          result.push({ acao: 'criar', estoqueNovo: item.qCom });
+          result.push({
+            acao: 'criar',
+            estoqueAtual: 0,
+            estoqueNovo: item.qCom,
+            jaCadastradoNesteLote: false,
+          });
         } else {
           result.push({ acao: 'ignorar' });
         }
@@ -279,6 +297,70 @@ export default function ImportarNFe() {
     })();
     return () => { cancelled = true; };
   }, [status, nfeData]);
+
+  const handleSalvarProdutoModal = async (data: Record<string, any>) => {
+    if (!itemParaCadastrar || !nfeData) return;
+    setSavingModal(true);
+    try {
+      const item = itemParaCadastrar.item;
+      const index = itemParaCadastrar.index;
+      delete data._lote;
+
+      // Define o estoque total inicial com a quantidade exata da nota fiscal
+      const payload = {
+        ...data,
+        estoque_total: item.qCom,
+      };
+
+      const { data: inserted, error: prodErr } = await (supabase as any)
+        .from('produtos')
+        .insert(payload)
+        .select('id, codigo, nome, aplicacao, estoque_total')
+        .single();
+
+      if (prodErr) throw prodErr;
+
+      // Registra o lote de entrada fiscal com preço de custo e chave da NF-e
+      await (supabase as any).from('lotes').insert({
+        produto_id: inserted.id,
+        fornecedor: nfeData.emitenteNome || '—',
+        preco_custo: item.vUnCom,
+        quantidade: item.qCom,
+        data_entrada: nfeData.dataEmissao || new Date().toISOString(),
+        nfe_chave: nfeData.chaveAcesso || null,
+      });
+
+      // Atualiza o status da linha na tabela para confirmar o cadastro e estoque
+      setAcoes(prev => {
+        const copy = [...prev];
+        copy[index] = {
+          acao: 'atualizar',
+          produtoId: inserted.id,
+          produtoNome: inserted.nome,
+          aplicacao: inserted.aplicacao,
+          estoqueAtual: 0,
+          estoqueNovo: item.qCom,
+          jaCadastradoNesteLote: true,
+        };
+        return copy;
+      });
+
+      toast({
+        title: 'Produto cadastrado com compatibilidade!',
+        description: `${inserted.nome} cadastrado com sucesso. Estoque de ${item.qCom} un registrado.`,
+      });
+
+      setItemParaCadastrar(null);
+    } catch (err: any) {
+      toast({
+        title: 'Erro ao cadastrar produto',
+        description: err.message,
+        variant: 'destructive',
+      });
+    } finally {
+      setSavingModal(false);
+    }
+  };
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
@@ -306,21 +388,22 @@ export default function ImportarNFe() {
 
       // 2. Processar itens — criar/atualizar produtos e lotes
       let processados = 0;
-      for (const item of nfeData.itens) {
-        if (item.qCom <= 0) continue;
+      for (let idx = 0; idx < nfeData.itens.length; idx++) {
+        const item = nfeData.itens[idx];
+        const acao = acoes[idx];
+        if (item.qCom <= 0 || acao?.acao === 'ignorar') continue;
 
-        const { data: prodExistente } = await (supabase as any)
-          .from('produtos')
-          .select('id, estoque_total')
-          .eq('codigo', item.cProd)
-          .maybeSingle();
+        // Se o produto já foi cadastrado via modal com compatibilidade durante este preview
+        if (acao?.jaCadastradoNesteLote) {
+          processados++;
+          continue;
+        }
 
         let produtoId: string;
 
-        if (prodExistente) {
-          produtoId = (prodExistente as any).id;
-          const delta = nfeData.tipo === 'entrada' ? item.qCom : -item.qCom;
-          const novoEstoque = Math.max(0, ((prodExistente as any).estoque_total ?? 0) + delta);
+        if (acao?.acao === 'atualizar' && acao.produtoId) {
+          produtoId = acao.produtoId;
+          const novoEstoque = acao.estoqueNovo ?? ((acao.estoqueAtual ?? 0) + item.qCom);
           await (supabase as any)
             .from('produtos')
             .update({
@@ -333,15 +416,20 @@ export default function ImportarNFe() {
             })
             .eq('id', produtoId);
         } else if (nfeData.tipo === 'entrada') {
-          const { data: novoProd } = await (supabase as any)
+          // Se não foi cadastrado manualmente com compatibilidade, cadastra automático com dados da nota
+          const { data: novoProd, error: insertErr } = await (supabase as any)
             .from('produtos')
             .insert({
               codigo: item.cProd,
+              codigo_fabrica: item.cProd,
               nome: item.xProd,
               ncm: item.ncm,
               marca: nfeData.emitenteNome,
+              aplicacao: 'A definir / Consultar compatibilidade',
+              categoria: 'Geral',
+              tipo_veiculo: 'Carro',
               estoque_total: item.qCom,
-              preco_venda: item.vUnCom * 1.5,
+              preco_venda: Math.round(item.vUnCom * 1.5 * 100) / 100,
               icms_percentual: item.pICMS,
               ipi_percentual: item.pIPI,
               pis_percentual: item.pPIS,
@@ -349,6 +437,8 @@ export default function ImportarNFe() {
             })
             .select('id')
             .single();
+
+          if (insertErr) throw insertErr;
           produtoId = (novoProd as any).id;
         } else {
           continue;
@@ -360,7 +450,7 @@ export default function ImportarNFe() {
             fornecedor: nfeData.emitenteNome,
             preco_custo: item.vUnCom,
             quantidade: item.qCom,
-            data_entrada: nfeData.dataEmissao,
+            data_entrada: nfeData.dataEmissao || new Date().toISOString(),
             nfe_chave: nfeData.chaveAcesso,
           });
         }
@@ -716,6 +806,30 @@ export default function ImportarNFe() {
             </div>
           </div>
 
+          {/* Aviso sobre produtos não cadastrados */}
+          {acoes.some(a => a.acao === 'criar') && (
+            <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs animate-fade-in">
+              <div className="flex items-center gap-2.5 text-amber-800 dark:text-amber-300">
+                <AlertTriangle size={18} className="shrink-0 text-amber-600" />
+                <span>
+                  Existem <strong>{acoes.filter(a => a.acao === 'criar').length} produto(s) novos</strong> nesta nota fiscal. Recomendamos cadastrar a <strong>compatibilidade veicular</strong> para que os vendedores encontrem a peça na busca por veículo do balcão.
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  const primeiroNovo = nfeData.itens.findIndex((_, i) => acoes[i]?.acao === 'criar');
+                  if (primeiroNovo >= 0) {
+                    setItemParaCadastrar({ item: nfeData.itens[primeiroNovo], index: primeiroNovo });
+                  }
+                }}
+                className="shrink-0 px-3.5 py-2 rounded-lg bg-amber-600 text-white font-semibold hover:bg-amber-700 transition-colors flex items-center gap-1.5 shadow-sm"
+              >
+                <Plus size={14} /> Cadastrar Primeiro Novo
+              </button>
+            </div>
+          )}
+
           {/* Lista de Produtos da Nota */}
           <div className="rounded-xl border bg-card shadow-sm overflow-hidden">
             <div className="px-5 py-3.5 border-b flex items-center gap-2">
@@ -725,10 +839,10 @@ export default function ImportarNFe() {
               {!analisando && acoes.length > 0 && (
                 <div className="ml-auto flex items-center gap-3 text-xs">
                   <span className="flex items-center gap-1 text-emerald-600 font-semibold">
-                    <PlusCircle size={13} /> {acoes.filter(a => a.acao === 'criar').length} novos cadastros
+                    <PlusCircle size={13} /> {acoes.filter(a => a.acao === 'criar').length} novos
                   </span>
                   <span className="flex items-center gap-1 text-blue-600 font-semibold">
-                    <ArrowUpCircle size={13} /> {acoes.filter(a => a.acao === 'atualizar').length} atualizar estoque
+                    <ArrowUpCircle size={13} /> {acoes.filter(a => a.acao === 'atualizar').length} somar ao estoque
                   </span>
                 </div>
               )}
@@ -742,29 +856,56 @@ export default function ImportarNFe() {
                     <th>Qtd</th>
                     <th>Vl. Unit.</th>
                     <th>Total</th>
-                    <th>Ação no Estoque</th>
+                    <th>Ação no Estoque & Compatibilidade</th>
                   </tr>
                 </thead>
                 <tbody>
                   {nfeData.itens.map((it, idx) => {
                     const acao = acoes[idx];
                     return (
-                      <tr key={idx}>
+                      <tr key={idx} className="hover:bg-muted/40 transition-colors">
                         <td className="font-mono text-xs">{it.cProd}</td>
-                        <td className="font-medium text-xs max-w-xs truncate">{it.xProd}</td>
+                        <td className="font-medium text-xs max-w-xs truncate" title={it.xProd}>{it.xProd}</td>
                         <td className="text-xs font-semibold">{it.qCom}</td>
                         <td className="text-xs">{it.vUnCom.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</td>
                         <td className="text-xs font-semibold">{(it.qCom * it.vUnCom).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</td>
                         <td>
                           {acao?.acao === 'criar' && (
-                            <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-600 bg-emerald-500/10 px-2 py-0.5 rounded">
-                              <PlusCircle size={11} /> Novo Produto (+{acao.estoqueNovo})
-                            </span>
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-amber-700 dark:text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded">
+                                <PlusCircle size={11} /> Não Cadastrado (+{it.qCom})
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => setItemParaCadastrar({ item: it, index: idx })}
+                                className="inline-flex items-center gap-1.5 text-[11px] font-semibold bg-primary text-primary-foreground hover:bg-primary/90 px-2.5 py-1 rounded-md shadow-sm transition-all"
+                              >
+                                <Plus size={12} /> Cadastrar com Compatibilidade
+                              </button>
+                            </div>
                           )}
                           {acao?.acao === 'atualizar' && (
-                            <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-blue-600 bg-blue-500/10 px-2 py-0.5 rounded">
-                              <ArrowUpCircle size={11} /> Estoque: {acao.estoqueAtual} → {acao.estoqueNovo}
-                            </span>
+                            <div className="flex flex-col gap-1 py-0.5">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className={cn(
+                                  "inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded",
+                                  acao.jaCadastradoNesteLote
+                                    ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400"
+                                    : "bg-blue-500/10 text-blue-700 dark:text-blue-400"
+                                )}>
+                                  {acao.jaCadastradoNesteLote ? <CheckCircle2 size={12} /> : <ArrowUpCircle size={12} />}
+                                  {acao.jaCadastradoNesteLote ? 'Cadastrado agora' : 'Já no catálogo'}
+                                </span>
+                                <span className="text-[11px] text-muted-foreground font-mono">
+                                  Estoque: {acao.estoqueAtual} ➔ <strong className="text-foreground">{acao.estoqueNovo}</strong> (+{it.qCom})
+                                </span>
+                              </div>
+                              {acao.aplicacao && (
+                                <span className="text-[10px] text-muted-foreground truncate max-w-sm" title={acao.aplicacao}>
+                                  🚗 Compatibilidade: {acao.aplicacao}
+                                </span>
+                              )}
+                            </div>
                           )}
                           {acao?.acao === 'ignorar' && (
                             <span className="text-[11px] text-muted-foreground">Ignorar</span>
@@ -795,6 +936,35 @@ export default function ImportarNFe() {
             </button>
           </div>
         </div>
+      )}
+
+      {/* Modal de Cadastro de Produto com Compatibilidade Veicular */}
+      {itemParaCadastrar && (
+        <ProdutoModal
+          produto={{
+            codigo: itemParaCadastrar.item.cProd,
+            codigo_fabrica: itemParaCadastrar.item.cProd,
+            nome: itemParaCadastrar.item.xProd,
+            marca: nfeData?.emitenteNome || '',
+            ncm: itemParaCadastrar.item.ncm || '',
+            preco_custo: itemParaCadastrar.item.vUnCom,
+            preco_venda: Math.round(itemParaCadastrar.item.vUnCom * 1.5 * 100) / 100,
+            markup_percentual: 50,
+            tipo_veiculo: 'Carro',
+            categoria: 'Geral',
+            aplicacao: '',
+            icms_percentual: itemParaCadastrar.item.pICMS || 0,
+            ipi_percentual: itemParaCadastrar.item.pIPI || 0,
+            pis_percentual: itemParaCadastrar.item.pPIS || 0,
+            cofins_percentual: itemParaCadastrar.item.pCOFINS || 0,
+            estoque_minimo: 1,
+          }}
+          onClose={() => setItemParaCadastrar(null)}
+          onSave={handleSalvarProdutoModal}
+          saving={savingModal}
+          markupPadrao={config?.markup_padrao || '50'}
+          orcamentoLabel={`Importação NF-e ${nfeData?.numero || ''} • Item ${itemParaCadastrar.index + 1}`}
+        />
       )}
 
       {/* Status: Concluído */}
