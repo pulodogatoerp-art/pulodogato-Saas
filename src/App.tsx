@@ -54,6 +54,7 @@ function AppRoutes() {
         <Route path="/vendas" element={<Vendas />} />
         <Route path="/financeiro" element={<Financeiro />} />
         <Route path="/importar-nfe" element={<ImportarNFe />} />
+        <Route path="/historico-nfe" element={<ImportarNFe defaultTab="historico" />} />
         <Route path="/usuarios" element={<GestaoUsuarios />} />
         <Route path="/configuracoes" element={<Configuracoes />} />
         <Route path="/configuracao-fiscal" element={<ConfiguracaoFiscal />} />

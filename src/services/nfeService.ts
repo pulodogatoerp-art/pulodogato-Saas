@@ -14,7 +14,7 @@ export interface NFeEmitente {
   cep?: string;
   telefone?: string;
   email?: string;
-  regimeTributario?: string; // 1: Simples Nacional, 3: Regime Normal
+  regimeTributario?: string; // 1: Simples Nacional, 2: Sublimite, 3: Regime Normal, 4: MEI
 }
 
 export interface NFeDestinatario {
@@ -316,7 +316,7 @@ export function gerarXmlNFe(dados: NFeVendaData, chaveAcesso: string, protocolo:
         </detPag>
       </pag>
       <infAdic>
-        <infCpl>${escapeXml(dados.informacoesAdicionais || 'Documento emitido por ME ou EPP optante pelo Simples Nacional. Nao gera direito a credito fiscal de IPI.')}</infCpl>
+        <infCpl>${escapeXml(dados.informacoesAdicionais || (dados.emitente.regimeTributario === '4' ? 'Documento emitido por MEI optante pelo Simples Nacional. Nao gera direito a credito fiscal de IPI.' : 'Documento emitido por ME ou EPP optante pelo Simples Nacional. Nao gera direito a credito fiscal de IPI.'))}</infCpl>
       </infAdic>
       ${isNfce ? `
       <infNFeSupl>

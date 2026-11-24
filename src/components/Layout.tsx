@@ -3,7 +3,7 @@ import { Link, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard, Package, Users, FileText, ShoppingCart,
   DollarSign, ChevronLeft, ChevronRight, LogOut, Settings,
-  Wrench, Menu, FileUp, ShieldCheck, Plug, Landmark
+  Wrench, Menu, FileUp, ShieldCheck, Plug, Landmark, History
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { UserRole } from '@/types';
@@ -31,6 +31,7 @@ const navItems = [
   { to: '/vendas', label: 'Vendas', icon: ShoppingCart },
   { to: '/financeiro', label: 'Financeiro', icon: DollarSign },
   { to: '/importar-nfe', label: 'Importar NF-e', icon: FileUp },
+  { to: '/historico-nfe', label: 'Histórico NF-e', icon: History },
 ];
 
 interface LayoutProps {

@@ -181,9 +181,11 @@ export default function ConfiguracaoFiscal() {
         <div className="rounded-xl border bg-card p-4 shadow-sm">
           <p className="text-xs text-muted-foreground font-semibold uppercase">Regime Tributário</p>
           <p className="font-bold text-sm mt-1">
-            {regimeAtual === '1' ? '1 - Simples Nacional' : regimeAtual === '2' ? '2 - Sublimite Simples' : '3 - Regime Normal'}
+            {regimeAtual === '1' ? '1 - Simples Nacional' : regimeAtual === '2' ? '2 - Sublimite Simples' : regimeAtual === '4' ? '4 - MEI (Simples Nacional)' : '3 - Regime Normal'}
           </p>
-          <p className="text-[11px] text-muted-foreground mt-0.5">ME / EPP optante</p>
+          <p className="text-[11px] text-muted-foreground mt-0.5">
+            {regimeAtual === '4' ? 'Microempreendedor Individual' : regimeAtual === '1' ? 'ME / EPP optante' : 'Regime de Apuração'}
+          </p>
         </div>
 
         <div className="rounded-xl border bg-card p-4 shadow-sm">
@@ -275,6 +277,7 @@ export default function ConfiguracaoFiscal() {
                     >
                       <option value="1">1 - Simples Nacional (Microempresa ou EPP)</option>
                       <option value="2">2 - Simples Nacional - Excesso de Sublimite de Receita</option>
+                      <option value="4">4 - Simples Nacional - Microempreendedor Individual (MEI)</option>
                       <option value="3">3 - Regime Normal (Lucro Presumido ou Lucro Real)</option>
                     </select>
                   </div>

@@ -309,6 +309,7 @@ export default function Configuracoes() {
                 >
                   <option value="1">1 - Simples Nacional (ME / EPP)</option>
                   <option value="2">2 - Simples Nacional - Excesso de Sublimite</option>
+                  <option value="4">4 - Simples Nacional - Microempreendedor Individual (MEI)</option>
                   <option value="3">3 - Regime Normal (Lucro Presumido / Lucro Real)</option>
                 </select>
               </div>

@@ -99,7 +99,7 @@ function useOrcamentos() {
             if (row.observacoes.trim().startsWith('{')) {
               meta = JSON.parse(row.observacoes);
             }
-          } catch {}
+          } catch { }
         }
         return {
           ...row,
@@ -629,8 +629,8 @@ export default function Orcamentos() {
       };
 
       // Validar se cliente_id é um UUID válido no banco (evita erro de FK com ID falso)
-      const validClienteId = (clienteAtivo.id && clienteAtivo.id !== '00000000-0000-0000-0000-000000000001') 
-        ? clienteAtivo.id 
+      const validClienteId = (clienteAtivo.id && clienteAtivo.id !== '00000000-0000-0000-0000-000000000001')
+        ? clienteAtivo.id
         : null;
 
       // Armazena dados extras de forma resiliente dentro de observacoes como metadados JSON
@@ -849,7 +849,7 @@ export default function Orcamentos() {
           if (selectedOrc.observacoes && typeof selectedOrc.observacoes === 'string' && selectedOrc.observacoes.trim().startsWith('{')) {
             metaExistente = JSON.parse(selectedOrc.observacoes);
           }
-        } catch {}
+        } catch { }
 
         const obsAtualizada = JSON.stringify({
           ...metaExistente,

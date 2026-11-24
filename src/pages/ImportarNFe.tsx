@@ -2,7 +2,9 @@ import { useState, useRef, useEffect, useMemo } from 'react';
 import {
   Upload, FileText, CheckCircle, AlertTriangle, XCircle, Loader2,
   Package, PlusCircle, ArrowUpCircle, Key, DownloadCloud, Search,
-  RefreshCw, Copy, CheckCircle2, ShieldCheck, Landmark, Plus, Wrench
+  RefreshCw, Copy, CheckCircle2, ShieldCheck, Landmark, Plus, Wrench,
+  History, Trash2, Eye, Download, Building2, Calendar, DollarSign,
+  Layers, AlertOctagon, ExternalLink, X
 } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useQuery } from '@tanstack/react-query';
@@ -115,7 +117,8 @@ function parseNFeXML(xmlText: string): NFeData {
   return { chaveAcesso, numero, serie, emitenteCnpj, emitenteNome, destinatarioCnpj, dataEmissao, valorTotal, tipo, itens };
 }
 
-export default function ImportarNFe() {
+export default function ImportarNFe({ defaultTab = 'entrada' }: { defaultTab?: 'entrada' | 'historico' }) {
+  const [tabPrincipal, setTabPrincipal] = useState<'entrada' | 'historico'>(defaultTab);
   const [metodo, setMetodo] = useState<MetodoEntrada>('chave');
   const [status, setStatus] = useState<ImportStatus>('idle');
   const [nfeData, setNfeData] = useState<NFeData | null>(null);
@@ -131,11 +134,36 @@ export default function ImportarNFe() {
   const [itemParaCadastrar, setItemParaCadastrar] = useState<{ item: NFeItem; index: number } | null>(null);
   const [savingModal, setSavingModal] = useState(false);
 
+  // Estados do Histórico de Notas e Grade de Custos
+  const [filtroHistorico, setFiltroHistorico] = useState('');
+  const [notaSelecionadaGrade, setNotaSelecionadaGrade] = useState<any | null>(null);
+  const [deletandoNotaId, setDeletandoNotaId] = useState<string | null>(null);
+  const [showConfirmLimparTudo, setShowConfirmLimparTudo] = useState(false);
+  const [limpandoTudo, setLimpandoTudo] = useState(false);
+
   const fileRef = useRef<HTMLInputElement>(null);
   const { toast } = useToast();
 
   const MAX_FILE_SIZE_MB = 5;
   const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024;
+
+  // Consulta histórico de notas fiscais importadas
+  const { data: historicoNotas = [], isLoading: loadingHistorico, refetch: refetchHistorico } = useQuery({
+    queryKey: ['nfe_importadas'],
+    queryFn: async () => {
+      const { data, error } = await (supabase as any)
+        .from('nfe_importadas')
+        .select('*')
+        .order('data_emissao', { ascending: false });
+      if (error) throw error;
+      return (data ?? []) as any[];
+    },
+  });
+
+  // Atualiza tab principal caso prop mude
+  useEffect(() => {
+    if (defaultTab) setTabPrincipal(defaultTab);
+  }, [defaultTab]);
 
   // Carrega configurações fiscais da empresa
   const { data: config } = useQuery({
@@ -505,13 +533,109 @@ export default function ImportarNFe() {
     }
   };
 
+  // Itens da nota selecionada para exibição na Grade de Custos
+  const itensGradeNota = useMemo<NFeItem[]>(() => {
+    if (!notaSelecionadaGrade || !notaSelecionadaGrade.xml_raw) return [];
+    try {
+      const parsed = parseNFeXML(notaSelecionadaGrade.xml_raw);
+      return parsed.itens || [];
+    } catch (e) {
+      console.error('Erro ao fazer parse do XML da nota:', e);
+      return [];
+    }
+  }, [notaSelecionadaGrade]);
+
+  const handleDownloadXml = (nota: any) => {
+    if (!nota?.xml_raw) {
+      toast({ title: 'XML não disponível', description: 'Esta nota não possui o XML bruto armazenado.', variant: 'destructive' });
+      return;
+    }
+    const blob = new Blob([nota.xml_raw], { type: 'application/xml;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `NFe-${nota.numero || 'nota'}-${(nota.chave_acesso || '').slice(-8)}.xml`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    toast({ title: 'Download iniciado', description: 'Arquivo XML baixado com sucesso.' });
+  };
+
+  const handleExcluirNota = async (nota: any) => {
+    if (!confirm(`Deseja realmente excluir a NF-e nº ${nota.numero} do fornecedor ${nota.emitente_nome || '—'}? Os lotes de estoque vinculados a esta nota também serão removidos.`)) {
+      return;
+    }
+    setDeletandoNotaId(nota.id);
+    try {
+      if (nota.chave_acesso) {
+        await (supabase as any).from('lotes').delete().eq('nfe_chave', nota.chave_acesso);
+      }
+      const { error } = await (supabase as any).from('nfe_importadas').delete().eq('id', nota.id);
+      if (error) throw error;
+
+      toast({
+        title: 'Nota fiscal excluída!',
+        description: `NF-e nº ${nota.numero} e seus lotes foram removidos com sucesso.`,
+      });
+      refetchHistorico();
+      if (notaSelecionadaGrade?.id === nota.id) {
+        setNotaSelecionadaGrade(null);
+      }
+    } catch (err: any) {
+      toast({ title: 'Erro ao excluir nota', description: err.message, variant: 'destructive' });
+    } finally {
+      setDeletandoNotaId(null);
+    }
+  };
+
+  const handleLimparTodoHistorico = async () => {
+    setLimpandoTudo(true);
+    try {
+      // 1. Remove todos os lotes que possuem chave de nota
+      await (supabase as any).from('lotes').delete().not('nfe_chave', 'is', null);
+
+      // 2. Remove todas as notas de nfe_importadas
+      const { error } = await (supabase as any)
+        .from('nfe_importadas')
+        .delete()
+        .neq('id', '00000000-0000-0000-0000-000000000000');
+      if (error) throw error;
+
+      toast({
+        title: 'Histórico de notas limpo com sucesso!',
+        description: 'Todas as notas importadas e seus lotes foram apagados. Você já pode importar novamente.',
+      });
+      setShowConfirmLimparTudo(false);
+      refetchHistorico();
+    } catch (err: any) {
+      toast({ title: 'Erro ao limpar histórico', description: err.message, variant: 'destructive' });
+    } finally {
+      setLimpandoTudo(false);
+    }
+  };
+
+  const notasFiltradas = useMemo(() => {
+    if (!filtroHistorico.trim()) return historicoNotas;
+    const q = filtroHistorico.toLowerCase();
+    return historicoNotas.filter((n: any) =>
+      (n.numero || '').toLowerCase().includes(q) ||
+      (n.chave_acesso || '').toLowerCase().includes(q) ||
+      (n.emitente_nome || '').toLowerCase().includes(q) ||
+      (n.emitente_cnpj || '').toLowerCase().includes(q)
+    );
+  }, [historicoNotas, filtroHistorico]);
+
+  const totalNotas = historicoNotas.length;
+  const totalValorCompras = historicoNotas.reduce((acc: number, n: any) => acc + Number(n.valor_total || 0), 0);
+
   return (
-    <div className="space-y-6 max-w-4xl mx-auto pb-12">
+    <div className="space-y-6 max-w-5xl mx-auto pb-12">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold text-foreground">Importar NF-e & Baixa SEFAZ</h1>
+          <h1 className="text-2xl font-bold text-foreground">Notas Fiscais de Entrada & SEFAZ</h1>
           <p className="text-sm text-muted-foreground mt-0.5">
-            Baixe notas emitidas contra seu CNPJ via Chave de Acesso ou faça upload do XML para dar entrada no estoque.
+            Entrada de mercadorias no estoque, baixa direta da SEFAZ, histórico de notas e grade de custo por nota.
           </p>
         </div>
 
@@ -523,7 +647,49 @@ export default function ImportarNFe() {
         )}
       </div>
 
-      {/* Seletores de Método de Entrada (apenas quando não estiver em preview/done) */}
+      {/* Abas Superiores de Navegação */}
+      <div className="flex border-b border-border gap-2">
+        <button
+          type="button"
+          onClick={() => setTabPrincipal('entrada')}
+          className={cn(
+            "flex items-center gap-2 px-4 py-2.5 text-sm font-semibold border-b-2 transition-colors",
+            tabPrincipal === 'entrada'
+              ? "border-primary text-primary bg-primary/5 rounded-t-lg"
+              : "border-transparent text-muted-foreground hover:text-foreground"
+          )}
+        >
+          <Upload size={16} />
+          Nova Entrada de NF-e
+        </button>
+
+        <button
+          type="button"
+          onClick={() => {
+            setTabPrincipal('historico');
+            refetchHistorico();
+          }}
+          className={cn(
+            "flex items-center gap-2 px-4 py-2.5 text-sm font-semibold border-b-2 transition-colors",
+            tabPrincipal === 'historico'
+              ? "border-primary text-primary bg-primary/5 rounded-t-lg"
+              : "border-transparent text-muted-foreground hover:text-foreground"
+          )}
+        >
+          <History size={16} />
+          Histórico de Notas & Grade de Custos
+          {historicoNotas.length > 0 && (
+            <span className="ml-1 px-2 py-0.5 text-xs rounded-full bg-primary/20 text-primary font-bold">
+              {historicoNotas.length}
+            </span>
+          )}
+        </button>
+      </div>
+
+      {/* ABA 1: Entrada de NF-e */}
+      {tabPrincipal === 'entrada' && (
+        <div className="space-y-6">
+          {/* Seletores de Método de Entrada (apenas quando não estiver em preview/done) */}
       {(status === 'idle' || status === 'parsing' || status === 'error' || status === 'duplicate') && (
         <div className="space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -1004,6 +1170,380 @@ export default function ImportarNFe() {
           >
             Voltar
           </button>
+        </div>
+      )}
+      </div>
+      )}
+
+      {/* ABA 2: Histórico de Notas & Grade de Custos */}
+      {tabPrincipal === 'historico' && (
+        <div className="space-y-6 animate-fade-in">
+          {/* Métricas do Histórico */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div className="rounded-xl border bg-card p-4 shadow-sm flex items-center justify-between">
+              <div>
+                <p className="text-xs text-muted-foreground font-semibold uppercase">Notas Importadas</p>
+                <p className="text-2xl font-bold text-foreground mt-1">{totalNotas}</p>
+                <p className="text-[11px] text-muted-foreground mt-0.5">Entradas fiscais registradas</p>
+              </div>
+              <div className="h-10 w-10 rounded-full bg-primary/10 text-primary flex items-center justify-center">
+                <FileText size={20} />
+              </div>
+            </div>
+
+            <div className="rounded-xl border bg-card p-4 shadow-sm flex items-center justify-between">
+              <div>
+                <p className="text-xs text-muted-foreground font-semibold uppercase">Total em Compras</p>
+                <p className="text-2xl font-bold text-emerald-600 mt-1">
+                  {totalValorCompras.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                </p>
+                <p className="text-[11px] text-muted-foreground mt-0.5">Valor faturado das notas</p>
+              </div>
+              <div className="h-10 w-10 rounded-full bg-emerald-500/10 text-emerald-600 flex items-center justify-center">
+                <DollarSign size={20} />
+              </div>
+            </div>
+
+            <div className="rounded-xl border bg-card p-4 shadow-sm flex items-center justify-between">
+              <div>
+                <p className="text-xs text-muted-foreground font-semibold uppercase">Média por Nota</p>
+                <p className="text-2xl font-bold text-blue-600 mt-1">
+                  {(totalNotas > 0 ? totalValorCompras / totalNotas : 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                </p>
+                <p className="text-[11px] text-muted-foreground mt-0.5">Ticket médio de compras</p>
+              </div>
+              <div className="h-10 w-10 rounded-full bg-blue-500/10 text-blue-600 flex items-center justify-center">
+                <Layers size={20} />
+              </div>
+            </div>
+          </div>
+
+          {/* Barra de Filtros e Ação de Limpar */}
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+            <div className="relative flex-1">
+              <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+              <input
+                type="text"
+                value={filtroHistorico}
+                onChange={e => setFiltroHistorico(e.target.value)}
+                placeholder="Buscar por número da nota, chave de 44 dígitos, fornecedor ou CNPJ..."
+                className="w-full pl-9 pr-4 py-2 text-sm rounded-lg border bg-background focus:outline-none focus:ring-2 focus:ring-primary"
+              />
+            </div>
+
+            {totalNotas > 0 && (
+              <button
+                type="button"
+                onClick={() => setShowConfirmLimparTudo(true)}
+                className="px-3.5 py-2 rounded-lg border border-red-500/40 text-red-600 hover:bg-red-500/10 transition-colors text-xs font-semibold flex items-center justify-center gap-1.5 shrink-0"
+              >
+                <Trash2 size={14} />
+                Limpar Todo o Histórico de Notas
+              </button>
+            )}
+          </div>
+
+          {/* Tabela de Notas Fiscais */}
+          <div className="rounded-xl border bg-card shadow-sm overflow-hidden">
+            {loadingHistorico ? (
+              <div className="py-16 text-center text-muted-foreground flex flex-col items-center gap-2">
+                <Loader2 className="animate-spin text-primary" size={28} />
+                <span className="text-sm">Carregando notas importadas...</span>
+              </div>
+            ) : notasFiltradas.length === 0 ? (
+              <div className="py-16 text-center text-muted-foreground space-y-3">
+                <FileText size={36} className="mx-auto text-muted-foreground/40" />
+                <p className="text-sm font-semibold">Nenhuma nota fiscal encontrada no histórico.</p>
+                <p className="text-xs max-w-sm mx-auto">
+                  {filtroHistorico ? 'Nenhum resultado para a busca informada.' : 'Importe suas notas fiscais de entrada para visualizar os custos e lotes aqui.'}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setTabPrincipal('entrada')}
+                  className="btn-primary text-xs px-4 py-2 rounded-lg font-semibold inline-flex items-center gap-1.5 mt-2"
+                >
+                  <Upload size={14} /> Importar Primeira Nota
+                </button>
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>NF-e / Série</th>
+                      <th>Fornecedor / Emitente</th>
+                      <th>Data Emissão</th>
+                      <th>Valor Total</th>
+                      <th>Chave de Acesso</th>
+                      <th className="text-right">Ações</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {notasFiltradas.map((nota: any) => (
+                      <tr key={nota.id} className="hover:bg-muted/40 transition-colors">
+                        <td>
+                          <div className="font-semibold text-xs text-foreground">
+                            Nº {nota.numero}
+                          </div>
+                          <div className="text-[10px] text-muted-foreground">
+                            Série {nota.serie || '1'}
+                          </div>
+                        </td>
+                        <td>
+                          <div className="font-medium text-xs text-foreground max-w-xs truncate" title={nota.emitente_nome}>
+                            {nota.emitente_nome || 'Fornecedor não identificado'}
+                          </div>
+                          <div className="text-[10px] text-muted-foreground font-mono">
+                            {formatarCnpj(nota.emitente_cnpj)}
+                          </div>
+                        </td>
+                        <td className="text-xs">
+                          {nota.data_emissao ? new Date(nota.data_emissao + 'T12:00:00').toLocaleDateString('pt-BR') : '—'}
+                        </td>
+                        <td className="text-xs font-bold text-foreground">
+                          {Number(nota.valor_total || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                        </td>
+                        <td>
+                          <div className="flex items-center gap-1 font-mono text-[11px] text-muted-foreground">
+                            <span title={nota.chave_acesso}>
+                              ...{nota.chave_acesso?.slice(-12) || '—'}
+                            </span>
+                            {nota.chave_acesso && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  navigator.clipboard.writeText(nota.chave_acesso);
+                                  toast({ title: 'Chave copiada!', description: 'Chave de 44 dígitos copiada.' });
+                                }}
+                                title="Copiar chave de acesso"
+                                className="p-1 hover:text-primary transition-colors"
+                              >
+                                <Copy size={12} />
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                        <td className="text-right">
+                          <div className="flex items-center justify-end gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => setNotaSelecionadaGrade(nota)}
+                              className="px-2.5 py-1 text-xs font-semibold bg-primary/10 text-primary hover:bg-primary/20 rounded-md transition-colors flex items-center gap-1"
+                              title="Visualizar grade de custos dos produtos da nota"
+                            >
+                              <Eye size={13} />
+                              Grade de Custo
+                            </button>
+
+                            {nota.xml_raw && (
+                              <button
+                                type="button"
+                                onClick={() => handleDownloadXml(nota)}
+                                className="p-1.5 text-muted-foreground hover:text-foreground rounded-md hover:bg-muted transition-colors"
+                                title="Baixar arquivo XML"
+                              >
+                                <Download size={14} />
+                              </button>
+                            )}
+
+                            <button
+                              type="button"
+                              onClick={() => handleExcluirNota(nota)}
+                              disabled={deletandoNotaId === nota.id}
+                              className="p-1.5 text-red-500 hover:text-red-700 rounded-md hover:bg-red-500/10 transition-colors disabled:opacity-50"
+                              title="Excluir nota e seus lotes"
+                            >
+                              {deletandoNotaId === nota.id ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Grade de Custos Completa da NF-e */}
+      {notaSelecionadaGrade && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-fade-in">
+          <div className="bg-card border rounded-2xl shadow-2xl max-w-4xl w-full max-h-[90vh] flex flex-col overflow-hidden">
+            {/* Header */}
+            <div className="px-6 py-4 border-b flex items-center justify-between bg-muted/20">
+              <div className="flex items-center gap-3">
+                <div className="h-10 w-10 rounded-xl bg-primary/10 text-primary flex items-center justify-center">
+                  <FileText size={20} />
+                </div>
+                <div>
+                  <h2 className="text-base font-bold text-foreground flex items-center gap-2">
+                    Grade de Custos · NF-e nº {notaSelecionadaGrade.numero}
+                    <span className="text-xs px-2 py-0.5 rounded bg-primary/10 text-primary font-mono">
+                      Série {notaSelecionadaGrade.serie || '1'}
+                    </span>
+                  </h2>
+                  <p className="text-xs text-muted-foreground">
+                    Fornecedor: <strong>{notaSelecionadaGrade.emitente_nome || '—'}</strong> ({formatarCnpj(notaSelecionadaGrade.emitente_cnpj)})
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setNotaSelecionadaGrade(null)}
+                className="p-1.5 rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Sub-header com dados da nota */}
+            <div className="px-6 py-3 bg-muted/10 border-b grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+              <div>
+                <span className="text-muted-foreground block text-[10px] uppercase font-semibold">Data Emissão</span>
+                <span className="font-semibold text-foreground">
+                  {notaSelecionadaGrade.data_emissao ? new Date(notaSelecionadaGrade.data_emissao + 'T12:00:00').toLocaleDateString('pt-BR') : '—'}
+                </span>
+              </div>
+              <div>
+                <span className="text-muted-foreground block text-[10px] uppercase font-semibold">Valor Total NF-e</span>
+                <span className="font-bold text-emerald-600 text-sm">
+                  {Number(notaSelecionadaGrade.valor_total || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                </span>
+              </div>
+              <div>
+                <span className="text-muted-foreground block text-[10px] uppercase font-semibold">Total de Itens</span>
+                <span className="font-semibold text-foreground">
+                  {itensGradeNota.length > 0 ? `${itensGradeNota.length} itens` : 'Calculando...'}
+                </span>
+              </div>
+              <div className="flex items-center justify-end gap-2">
+                {notaSelecionadaGrade.xml_raw && (
+                  <button
+                    type="button"
+                    onClick={() => handleDownloadXml(notaSelecionadaGrade)}
+                    className="px-2.5 py-1.5 text-xs font-semibold rounded-lg border hover:bg-muted transition-colors flex items-center gap-1.5"
+                  >
+                    <Download size={13} /> Baixar XML
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Tabela de Produtos / Grade de Custo */}
+            <div className="flex-1 overflow-y-auto p-6">
+              {itensGradeNota.length === 0 ? (
+                <div className="py-12 text-center text-muted-foreground">
+                  <Package size={32} className="mx-auto mb-2 opacity-40" />
+                  <p className="text-sm">Os itens desta nota não puderam ser extraídos do XML.</p>
+                </div>
+              ) : (
+                <div className="overflow-x-auto rounded-xl border">
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        <th>Código</th>
+                        <th>Descrição da Peça</th>
+                        <th>NCM</th>
+                        <th>Qtd</th>
+                        <th>Preço Custo Unit.</th>
+                        <th>Total de Custo</th>
+                        <th>ICMS</th>
+                        <th>IPI</th>
+                        <th>PIS/COFINS</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {itensGradeNota.map((it, idx) => (
+                        <tr key={idx} className="hover:bg-muted/40 transition-colors">
+                          <td className="font-mono text-xs font-semibold">{it.cProd}</td>
+                          <td className="font-medium text-xs max-w-xs truncate" title={it.xProd}>{it.xProd}</td>
+                          <td className="font-mono text-xs text-muted-foreground">{it.ncm || '—'}</td>
+                          <td className="text-xs font-bold text-foreground">{it.qCom}</td>
+                          <td className="text-xs font-semibold text-emerald-600">
+                            {it.vUnCom.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                          </td>
+                          <td className="text-xs font-bold text-foreground">
+                            {(it.qCom * it.vUnCom).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                          </td>
+                          <td className="text-[11px] text-muted-foreground">{it.pICMS ? `${it.pICMS}%` : '—'}</td>
+                          <td className="text-[11px] text-muted-foreground">{it.pIPI ? `${it.pIPI}%` : '—'}</td>
+                          <td className="text-[11px] text-muted-foreground">
+                            {it.pPIS || it.pCOFINS ? `${it.pPIS || 0}% / ${it.pCOFINS || 0}%` : '—'}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot>
+                      <tr className="bg-muted/20 font-bold text-xs border-t">
+                        <td colSpan={3} className="text-right">TOTAIS DA NOTA:</td>
+                        <td>{itensGradeNota.reduce((acc, i) => acc + i.qCom, 0)} un</td>
+                        <td>—</td>
+                        <td className="text-emerald-600 font-bold">
+                          {itensGradeNota.reduce((acc, i) => acc + (i.qCom * i.vUnCom), 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                        </td>
+                        <td colSpan={3}>—</td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="px-6 py-3 border-t bg-muted/20 flex items-center justify-between">
+              <span className="text-[11px] text-muted-foreground font-mono truncate max-w-md">
+                Chave: {formatarChave44(notaSelecionadaGrade.chave_acesso)}
+              </span>
+              <button
+                type="button"
+                onClick={() => setNotaSelecionadaGrade(null)}
+                className="btn-primary text-xs px-4 py-2 rounded-lg font-semibold"
+              >
+                Fechar Grade de Custos
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Confirmar Limpar Todo Histórico de Notas */}
+      {showConfirmLimparTudo && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-fade-in">
+          <div className="bg-card border border-red-500/30 rounded-2xl shadow-2xl max-w-md w-full p-6 space-y-4 text-center">
+            <div className="h-12 w-12 rounded-full bg-red-500/10 text-red-600 flex items-center justify-center mx-auto">
+              <AlertOctagon size={28} />
+            </div>
+            <div>
+              <h3 className="text-lg font-bold text-foreground">Excluir Todo o Histórico de Notas?</h3>
+              <p className="text-xs text-muted-foreground mt-2 leading-relaxed">
+                Esta ação apagará permanentemente todas as <strong>{totalNotas} nota(s) importada(s)</strong> do histórico e removerá os lotes de entrada associados a elas.
+              </p>
+              <p className="text-xs font-semibold text-amber-600 mt-2">
+                Use esta opção para limpar registros com valores/itens incorretos e reimportá-las limpas.
+              </p>
+            </div>
+            <div className="flex gap-3 justify-center pt-2">
+              <button
+                type="button"
+                onClick={() => setShowConfirmLimparTudo(false)}
+                disabled={limpandoTudo}
+                className="px-4 py-2 rounded-lg border text-xs font-semibold hover:bg-muted transition-colors"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleLimparTodoHistorico}
+                disabled={limpandoTudo}
+                className="px-4 py-2 rounded-lg bg-red-600 text-white hover:bg-red-700 transition-colors text-xs font-semibold flex items-center gap-1.5 shadow-sm"
+              >
+                {limpandoTudo ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
+                Sim, Limpar Todo Histórico
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>
