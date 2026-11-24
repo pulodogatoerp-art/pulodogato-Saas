@@ -755,8 +755,8 @@ export default function Vendas() {
                   {emitindo
                     ? 'Transmitindo para a SEFAZ…'
                     : tipoDocumentoEmissao === 'nfce'
-                    ? 'Autorizar e Imprimir Cupom (NFC-e)'
-                    : 'Autorizar e Gerar DANFE (NF-e)'}
+                      ? 'Autorizar e Imprimir Cupom (NFC-e)'
+                      : 'Autorizar e Gerar DANFE (NF-e)'}
                 </button>
               </div>
             </div>

@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
-import { Settings, Building2, Percent, Save, Loader2, Receipt, CreditCard, Lock, Eye, EyeOff, FileText, CheckCircle2 } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { Settings, Building2, Percent, Save, Loader2, Receipt, CreditCard, Lock, Eye, EyeOff, FileText, CheckCircle2, Landmark } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useToast } from '@/hooks/use-toast';
@@ -189,7 +190,7 @@ export default function Configuracoes() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-foreground">Configurações</h1>
+          <h1 className="text-2xl font-bold text-foreground">Configurações Gerais</h1>
           <p className="text-sm text-muted-foreground mt-0.5">Dados da empresa e preferências do sistema</p>
         </div>
         {isAdmin && (
@@ -208,6 +209,29 @@ export default function Configuracoes() {
           </button>
         )}
       </div>
+
+      {/* Banner de Atalho para Configuração Fiscal */}
+      {isAdmin && (
+        <div className="rounded-xl border border-primary/30 bg-primary/5 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-sm">
+          <div className="flex items-center gap-3">
+            <div className="p-2.5 rounded-lg bg-primary text-primary-foreground flex-shrink-0">
+              <Landmark size={22} />
+            </div>
+            <div>
+              <h3 className="font-bold text-sm text-foreground">Painel Exclusivo de Configuração Fiscal (SEFAZ)</h3>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Centralize o Certificado Digital A1, parâmetros de NFC-e (Balcão), NF-e (A4), alíquotas e download de notas contra o CNPJ.
+              </p>
+            </div>
+          </div>
+          <Link
+            to="/configuracao-fiscal"
+            className="btn-primary text-xs font-semibold px-4 py-2 rounded-lg whitespace-nowrap shadow-sm text-center"
+          >
+            Acessar Configuração Fiscal ➔
+          </Link>
+        </div>
+      )}
 
       {/* Dados da Empresa */}
       <div className="rounded-xl border bg-card shadow-sm">

@@ -13,6 +13,7 @@ import Financeiro from "./pages/Financeiro";
 import ImportarNFe from "./pages/ImportarNFe";
 import GestaoUsuarios from "./pages/GestaoUsuarios";
 import Configuracoes from "./pages/Configuracoes";
+import ConfiguracaoFiscal from "./pages/ConfiguracaoFiscal";
 import ApiIntegracao from "./pages/ApiIntegracao";
 import Login from "./pages/Login";
 import ResetPassword from "./pages/ResetPassword";
@@ -55,6 +56,7 @@ function AppRoutes() {
         <Route path="/importar-nfe" element={<ImportarNFe />} />
         <Route path="/usuarios" element={<GestaoUsuarios />} />
         <Route path="/configuracoes" element={<Configuracoes />} />
+        <Route path="/configuracao-fiscal" element={<ConfiguracaoFiscal />} />
         <Route path="/integracao-api" element={<ApiIntegracao />} />
         <Route path="/reset-password" element={<ResetPassword />} />
         <Route path="/login" element={<Navigate to="/" replace />} />

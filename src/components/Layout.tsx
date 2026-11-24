@@ -3,7 +3,7 @@ import { Link, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard, Package, Users, FileText, ShoppingCart,
   DollarSign, ChevronLeft, ChevronRight, LogOut, Settings,
-  Wrench, Menu, FileUp, ShieldCheck, Plug
+  Wrench, Menu, FileUp, ShieldCheck, Plug, Landmark
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { UserRole } from '@/types';
@@ -85,6 +85,14 @@ export default function Layout({ children }: LayoutProps) {
         })}
         {userRole === 'admin' && (
           <>
+            <Link
+              to="/configuracao-fiscal"
+              onClick={() => setMobileOpen(false)}
+              className={cn('sidebar-nav-item', location.pathname === '/configuracao-fiscal' && 'active')}
+            >
+              <Landmark size={18} className="flex-shrink-0" />
+              {!collapsed && <span>Configuração Fiscal</span>}
+            </Link>
             <Link
               to="/usuarios"
               onClick={() => setMobileOpen(false)}
