@@ -84,9 +84,9 @@ function parseNFeXML(xmlText: string): NFeData {
   const dataEmissao = (get('dhEmi', ide) || get('dEmi', ide)).split('T')[0];
   const valorTotal = parseFloat(get('vNF') || '0');
 
-  // tpNF: 0=entrada, 1=saida
-  const tpNF = get('tpNF', ide);
-  const tipo: 'entrada' | 'saida' = tpNF === '1' ? 'saida' : 'entrada';
+  // Na tela de Importação de NF-e de fornecedor, toda nota importada é Entrada de Mercadoria no estoque
+  // (no XML do fornecedor tpNF vem como '1' porque para o fornecedor foi saída, mas para nós é entrada)
+  const tipo: 'entrada' | 'saida' = 'entrada';
 
   const detElements = doc.getElementsByTagNameNS('*', 'det');
   const itens: NFeItem[] = Array.from(detElements).map(det => {
@@ -278,48 +278,75 @@ export default function ImportarNFe({ defaultTab = 'entrada' }: { defaultTab?: '
     }
   };
 
-  // Analisa cada item: existe no catálogo? criar ou atualizar estoque?
+  // Busca produto existente no catálogo com segurança (por código, código de fábrica ou nome)
+  const buscarProdutoExistente = async (cod?: string, nome?: string) => {
+    const codLimpo = (cod || '').trim();
+    if (codLimpo) {
+      const { data: byCod } = await (supabase as any)
+        .from('produtos')
+        .select('id, codigo, codigo_fabrica, nome, aplicacao, estoque_total')
+        .eq('codigo', codLimpo)
+        .limit(1);
+      if (byCod && byCod.length > 0) return byCod[0];
+
+      const { data: byFab } = await (supabase as any)
+        .from('produtos')
+        .select('id, codigo, codigo_fabrica, nome, aplicacao, estoque_total')
+        .eq('codigo_fabrica', codLimpo)
+        .limit(1);
+      if (byFab && byFab.length > 0) return byFab[0];
+    }
+
+    const nomeLimpo = (nome || '').trim();
+    if (nomeLimpo) {
+      const { data: byNome } = await (supabase as any)
+        .from('produtos')
+        .select('id, codigo, codigo_fabrica, nome, aplicacao, estoque_total')
+        .ilike('nome', nomeLimpo)
+        .limit(1);
+      if (byNome && byNome.length > 0) return byNome[0];
+    }
+
+    return null;
+  };
+
+  // Analisa cada item: existe no catálogo? criar na entrada ou somar ao estoque?
   useEffect(() => {
     if (status !== 'preview' || !nfeData) return;
     let cancelled = false;
     (async () => {
       setAnalisando(true);
       const result: ItemAcao[] = [];
-      for (const item of nfeData.itens) {
-        if (item.qCom <= 0) {
-          result.push({ acao: 'ignorar' });
+      for (let i = 0; i < nfeData.itens.length; i++) {
+        const item = nfeData.itens[i];
+        // Preserva caso já tenha sido cadastrado/somado manualmente durante este preview
+        if (acoes[i]?.jaCadastradoNesteLote) {
+          result.push(acoes[i]);
           continue;
         }
 
-        // Procura no catálogo por código da nota ou código de fábrica
-        const { data: prod } = await (supabase as any)
-          .from('produtos')
-          .select('id, nome, aplicacao, estoque_total')
-          .or(`codigo.eq.${item.cProd},codigo_fabrica.eq.${item.cProd}`)
-          .maybeSingle();
+        const qtdItem = Math.max(1, Math.round(Number(item.qCom || 1)));
+        const prod = await buscarProdutoExistente(item.cProd, item.xProd);
 
         if (prod) {
-          const delta = nfeData.tipo === 'entrada' ? item.qCom : -item.qCom;
-          const estoqueAtual = Number((prod as any).estoque_total ?? 0);
-          const estoqueNovo = Math.max(0, estoqueAtual + delta);
+          const estoqueAtual = Number(prod.estoque_total ?? 0);
+          const estoqueNovo = estoqueAtual + qtdItem;
           result.push({
             acao: 'atualizar',
-            produtoId: (prod as any).id,
-            produtoNome: (prod as any).nome,
-            aplicacao: (prod as any).aplicacao,
+            produtoId: prod.id,
+            produtoNome: prod.nome,
+            aplicacao: prod.aplicacao,
             estoqueAtual,
             estoqueNovo,
             jaCadastradoNesteLote: false,
           });
-        } else if (nfeData.tipo === 'entrada') {
+        } else {
           result.push({
             acao: 'criar',
             estoqueAtual: 0,
-            estoqueNovo: item.qCom,
+            estoqueNovo: qtdItem,
             jaCadastradoNesteLote: false,
           });
-        } else {
-          result.push({ acao: 'ignorar' });
         }
       }
       if (!cancelled) {
@@ -328,7 +355,7 @@ export default function ImportarNFe({ defaultTab = 'entrada' }: { defaultTab?: '
       }
     })();
     return () => { cancelled = true; };
-  }, [status, nfeData]);
+  }, [status, nfeData?.chaveAcesso]);
 
   const handleSalvarProdutoModal = async (data: Record<string, any>) => {
     if (!itemParaCadastrar || !nfeData) return;
@@ -336,11 +363,24 @@ export default function ImportarNFe({ defaultTab = 'entrada' }: { defaultTab?: '
     try {
       const item = itemParaCadastrar.item;
       const index = itemParaCadastrar.index;
+      const loteModal = data._lote;
       delete data._lote;
       delete data.preco_custo;
       delete data.frete_custo;
 
-      const codItem = (data.codigo || data.codigo_fabrica || item.cProd || `PRD-${Date.now().toString().slice(-6)}`).trim();
+      const qtdEntrada = Math.max(
+        1,
+        Math.round(Number(loteModal?.quantidade) > 0 ? Number(loteModal.quantidade) : Number(item.qCom || 1))
+      );
+      const custoUnit = Number(loteModal?.preco_custo) > 0 ? Number(loteModal.preco_custo) : Number(item.vUnCom || 0);
+      const fornNome = (
+        loteModal?.fornecedor ||
+        data.marca ||
+        (nfeData.emitenteNome && !nfeData.emitenteNome.includes('DISTRIBUIDORA / FORNECEDOR') ? nfeData.emitenteNome : '') ||
+        '—'
+      ).trim();
+
+      const codItem = (data.codigo_fabrica || data.codigo || item.cProd || `PRD-${Date.now().toString().slice(-6)}`).trim();
 
       // Colunas permitidas na tabela produtos (remove frete_custo/preco_custo que pertencem a lotes)
       const COLUNAS_PRODUTOS = [
@@ -350,17 +390,22 @@ export default function ImportarNFe({ defaultTab = 'entrada' }: { defaultTab?: '
         'pis_percentual', 'cofins_percentual', 'localizacao', 'imagem_url', 'imagens'
       ];
 
+      // Verifica se o produto já existe no catálogo para SOMAR ao estoque em vez de falhar por código duplicado
+      const prodExistente = await buscarProdutoExistente(codItem, data.nome);
+      const estoquePrevio = prodExistente ? Number(prodExistente.estoque_total || 0) : 0;
+      const novoEstoque = estoquePrevio + qtdEntrada;
+
       const rawPayload: Record<string, any> = {
-        codigo: codItem,
+        codigo: prodExistente?.codigo || codItem,
         codigo_fabrica: (data.codigo_fabrica || codItem).trim(),
         codigo_interno: (data.codigo_interno || '').trim(),
         ...data,
-        marca: (data.marca || nfeData.emitenteNome || 'Geral').trim(),
+        marca: (data.marca || fornNome || 'Geral').trim(),
         aplicacao: (data.aplicacao || 'A definir / Consultar catálogo').trim(),
         categoria: data.categoria || 'Geral',
         tipo_veiculo: data.tipo_veiculo || 'Carro',
-        estoque_total: Number(item.qCom || 0),
-        estoque_minimo: Number(data.estoque_minimo || 0),
+        estoque_total: novoEstoque,
+        estoque_minimo: Number(data.estoque_minimo || 1),
         markup_percentual: Number(data.markup_percentual || 50),
         localizacao: data.localizacao || 'Corredor A-Prateleira 01-G-01',
       };
@@ -372,34 +417,80 @@ export default function ImportarNFe({ defaultTab = 'entrada' }: { defaultTab?: '
         }
       }
 
-      const { data: inserted, error: prodErr } = await (supabase as any)
-        .from('produtos')
-        .insert(payload)
-        .select('id, codigo, nome, aplicacao, estoque_total')
-        .single();
-
-      if (prodErr) throw prodErr;
+      let savedProd: any = null;
+      if (prodExistente) {
+        const { data: updated, error: updErr } = await (supabase as any)
+          .from('produtos')
+          .update(payload)
+          .eq('id', prodExistente.id)
+          .select('id, codigo, nome, aplicacao, estoque_total')
+          .single();
+        if (updErr) throw updErr;
+        savedProd = updated;
+      } else {
+        const { data: inserted, error: prodErr } = await (supabase as any)
+          .from('produtos')
+          .insert(payload)
+          .select('id, codigo, nome, aplicacao, estoque_total')
+          .single();
+        if (prodErr) throw prodErr;
+        savedProd = inserted;
+      }
 
       // Registra o lote de entrada fiscal com preço de custo e chave da NF-e
       await (supabase as any).from('lotes').insert({
-        produto_id: inserted.id,
-        fornecedor: nfeData.emitenteNome || '—',
-        preco_custo: item.vUnCom,
-        quantidade: item.qCom,
-        data_entrada: nfeData.dataEmissao || new Date().toISOString(),
+        produto_id: savedProd.id,
+        fornecedor: fornNome,
+        preco_custo: custoUnit,
+        quantidade: qtdEntrada,
+        data_entrada: (nfeData.dataEmissao || new Date().toISOString()).split('T')[0],
         nfe_chave: nfeData.chaveAcesso || null,
       });
 
-      // Atualiza o status da linha na tabela para confirmar o cadastro e estoque
+      // Atualiza o item na nota fiscal em memória para refletir nome, código, custo, quantidade e fornecedor reais
+      setNfeData(prev => {
+        if (!prev) return prev;
+        const novosItens = [...prev.itens];
+        const itemAtualizado: NFeItem = {
+          ...item,
+          cProd: savedProd.codigo || codItem,
+          xProd: savedProd.nome || data.nome,
+          ncm: data.ncm || item.ncm || '',
+          qCom: qtdEntrada,
+          vUnCom: custoUnit,
+          pICMS: Number(data.icms_percentual ?? item.pICMS ?? 0),
+          pIPI: Number(data.ipi_percentual ?? item.pIPI ?? 0),
+          pPIS: Number(data.pis_percentual ?? item.pPIS ?? 0),
+          pCOFINS: Number(data.cofins_percentual ?? item.pCOFINS ?? 0),
+        };
+        if (index < novosItens.length) {
+          novosItens[index] = itemAtualizado;
+        } else {
+          novosItens.push(itemAtualizado);
+        }
+        const novoTotal = novosItens.reduce((acc, it) => acc + (Number(it.qCom || 0) * Number(it.vUnCom || 0)), 0);
+        const novoEmitente =
+          prev.emitenteNome.includes('DISTRIBUIDORA / FORNECEDOR') && fornNome && fornNome !== '—'
+            ? fornNome
+            : prev.emitenteNome;
+        return {
+          ...prev,
+          emitenteNome: novoEmitente,
+          valorTotal: novoTotal > 0 ? novoTotal : prev.valorTotal,
+          itens: novosItens,
+        };
+      });
+
+      // Atualiza o status da linha na tabela para confirmar o cadastro e soma no estoque
       setAcoes(prev => {
         const copy = [...prev];
         copy[index] = {
           acao: 'atualizar',
-          produtoId: inserted.id,
-          produtoNome: inserted.nome,
-          aplicacao: inserted.aplicacao,
-          estoqueAtual: 0,
-          estoqueNovo: item.qCom,
+          produtoId: savedProd.id,
+          produtoNome: savedProd.nome,
+          aplicacao: savedProd.aplicacao,
+          estoqueAtual: estoquePrevio,
+          estoqueNovo: novoEstoque,
           jaCadastradoNesteLote: true,
         };
         return copy;
@@ -407,18 +498,19 @@ export default function ImportarNFe({ defaultTab = 'entrada' }: { defaultTab?: '
 
       // Invalida cache de produtos no React Query para aparecer imediatamente em /produtos
       queryClient.invalidateQueries({ queryKey: ['produtos'] });
+      queryClient.invalidateQueries({ queryKey: ['produtos-search'] });
       queryClient.invalidateQueries({ queryKey: ['dashboard-produtos'] });
       queryClient.invalidateQueries({ queryKey: ['lotes'] });
 
       toast({
-        title: 'Produto cadastrado com compatibilidade!',
-        description: `${inserted.nome} cadastrado com sucesso. Estoque de ${item.qCom} un registrado.`,
+        title: prodExistente ? 'Estoque somado ao produto!' : 'Produto criado na entrada da NF-e!',
+        description: `${savedProd.nome}: +${qtdEntrada} un somada(s) ao estoque (Total: ${novoEstoque} un).`,
       });
 
       setItemParaCadastrar(null);
     } catch (err: any) {
       toast({
-        title: 'Erro ao cadastrar produto',
+        title: 'Erro ao salvar produto da NF-e',
         description: err.message,
         variant: 'destructive',
       });
@@ -434,42 +526,72 @@ export default function ImportarNFe({ defaultTab = 'entrada' }: { defaultTab?: '
     if (file) handleFile(file);
   };
 
-  const handleImport = async () => {
+  const handleImport = async (forcarReprocessamento = false) => {
     if (!nfeData) return;
     setStatus('importing');
 
     try {
-      // 1. Verificar duplicata
-      const { data: existing } = await (supabase as any)
+      // 1. Verificar se a chave já existe em nfe_importadas
+      const { data: existingList } = await (supabase as any)
         .from('nfe_importadas')
-        .select('id')
+        .select('id, status')
         .eq('chave_acesso', nfeData.chaveAcesso)
-        .maybeSingle();
+        .limit(1);
+      const existing = existingList?.[0];
 
-      if (existing) {
-        setStatus('duplicate');
-        return;
+      if (existing && !forcarReprocessamento) {
+        // Verifica se a importação anterior realmente gerou lotes ou se algum item foi cadastrado agora
+        const { data: lotesExistentes } = await (supabase as any)
+          .from('lotes')
+          .select('id')
+          .eq('nfe_chave', nfeData.chaveAcesso)
+          .limit(1);
+
+        const jaCadastrouNoPreview = acoes.some(a => a?.jaCadastradoNesteLote);
+        if (lotesExistentes && lotesExistentes.length > 0 && !jaCadastrouNoPreview) {
+          setStatus('duplicate');
+          return;
+        }
       }
 
-      // 2. Processar itens — criar/atualizar produtos e lotes
+      // 2. Processar todos os itens da nota — criar itens novos automaticamente e somar ao estoque
       let processados = 0;
+      const markupConfig = Number(config?.markup_padrao || 50) || 50;
+
       for (let idx = 0; idx < nfeData.itens.length; idx++) {
         const item = nfeData.itens[idx];
         const acao = acoes[idx];
-        if (item.qCom <= 0 || acao?.acao === 'ignorar') continue;
+        const qtdItem = Math.max(1, Math.round(Number(item.qCom || 1)));
+        if (acao?.acao === 'ignorar') continue;
 
-        // Se o produto já foi cadastrado via modal com compatibilidade durante este preview
+        // Se o produto já foi criado/somado via modal durante este preview, já está no estoque!
         if (acao?.jaCadastradoNesteLote) {
           processados++;
           continue;
         }
 
         let produtoId: string;
+        const codItem = (item.cProd || `PRD-${Date.now().toString().slice(-6)}-${idx + 1}`).trim();
 
-        if (acao?.acao === 'atualizar' && acao.produtoId) {
-          produtoId = acao.produtoId;
-          const novoEstoque = acao.estoqueNovo ?? ((acao.estoqueAtual ?? 0) + item.qCom);
-          await (supabase as any)
+        // Verifica se já existe no catálogo (pelo produtoId identificado ou por código/nome)
+        let prodExistente: any = null;
+        if (acao?.produtoId) {
+          const { data: byId } = await (supabase as any)
+            .from('produtos')
+            .select('id, estoque_total')
+            .eq('id', acao.produtoId)
+            .limit(1);
+          prodExistente = byId?.[0] || null;
+        }
+        if (!prodExistente) {
+          prodExistente = await buscarProdutoExistente(codItem, item.xProd);
+        }
+
+        if (prodExistente) {
+          produtoId = prodExistente.id;
+          const estoquePrevio = Number(prodExistente.estoque_total || 0);
+          const novoEstoque = estoquePrevio + qtdItem;
+          const { error: updErr } = await (supabase as any)
             .from('produtos')
             .update({
               estoque_total: novoEstoque,
@@ -480,103 +602,93 @@ export default function ImportarNFe({ defaultTab = 'entrada' }: { defaultTab?: '
               updated_at: new Date().toISOString(),
             })
             .eq('id', produtoId);
-        } else if (nfeData.tipo === 'entrada') {
-          // Verifica se já existe por código antes de inserir para evitar violação de UNIQUE constraint
-          const codItem = (item.cProd || `PRD-${Date.now().toString().slice(-6)}`).trim();
-          const { data: prodJaExiste } = await (supabase as any)
-            .from('produtos')
-            .select('id, estoque_total')
-            .or(`codigo.eq.${codItem},codigo_fabrica.eq.${codItem}`)
-            .maybeSingle();
-
-          if (prodJaExiste) {
-            produtoId = prodJaExiste.id;
-            const estoquePrevio = Number(prodJaExiste.estoque_total || 0);
-            const novoEstoque = estoquePrevio + item.qCom;
-            await (supabase as any)
-              .from('produtos')
-              .update({
-                estoque_total: novoEstoque,
-                icms_percentual: item.pICMS || 0,
-                ipi_percentual: item.pIPI || 0,
-                pis_percentual: item.pPIS || 0,
-                cofins_percentual: item.pCOFINS || 0,
-                updated_at: new Date().toISOString(),
-              })
-              .eq('id', produtoId);
-          } else {
-            // Se não foi cadastrado manualmente com compatibilidade, cadastra automático com dados da nota
-            const { data: novoProd, error: insertErr } = await (supabase as any)
-              .from('produtos')
-              .insert({
-                codigo: codItem,
-                codigo_fabrica: codItem,
-                codigo_interno: '',
-                nome: item.xProd.trim(),
-                ncm: item.ncm || '',
-                marca: nfeData.emitenteNome || 'Geral',
-                aplicacao: 'A definir / Consultar compatibilidade',
-                categoria: 'Geral',
-                tipo_veiculo: 'Carro',
-                estoque_total: item.qCom,
-                estoque_minimo: 0,
-                preco_venda: Math.round(item.vUnCom * 1.5 * 100) / 100,
-                markup_percentual: 50,
-                localizacao: 'Corredor A-Prateleira 01-G-01',
-                icms_percentual: item.pICMS || 0,
-                ipi_percentual: item.pIPI || 0,
-                pis_percentual: item.pPIS || 0,
-                cofins_percentual: item.pCOFINS || 0,
-              })
-              .select('id')
-              .single();
-
-            if (insertErr) throw insertErr;
-            produtoId = (novoProd as any).id;
-          }
+          if (updErr) throw updErr;
         } else {
-          continue;
+          // Cria automaticamente o item na entrada da NF-e e já soma a quantidade ao estoque!
+          const custoBase = Number(item.vUnCom || 0);
+          const totalImpostos = (item.pICMS || 0) + (item.pIPI || 0) + (item.pPIS || 0) + (item.pCOFINS || 0);
+          const precoVendaSugerido = custoBase > 0
+            ? Math.round(custoBase * (1 + totalImpostos / 100) * (1 + markupConfig / 100) * 100) / 100
+            : 0;
+
+          const { data: novoProd, error: insertErr } = await (supabase as any)
+            .from('produtos')
+            .insert({
+              codigo: codItem,
+              codigo_fabrica: codItem,
+              codigo_interno: '',
+              nome: (item.xProd || `Peça NF ${nfeData.numero}`).trim(),
+              ncm: item.ncm || '',
+              marca: (nfeData.emitenteNome && !nfeData.emitenteNome.includes('DISTRIBUIDORA / FORNECEDOR') ? nfeData.emitenteNome : 'Geral').trim(),
+              aplicacao: 'A definir / Consultar compatibilidade',
+              categoria: 'Geral',
+              tipo_veiculo: 'Carro',
+              estoque_total: qtdItem,
+              estoque_minimo: 1,
+              preco_venda: precoVendaSugerido,
+              markup_percentual: markupConfig,
+              localizacao: 'Corredor A-Prateleira 01-G-01',
+              icms_percentual: item.pICMS || 0,
+              ipi_percentual: item.pIPI || 0,
+              pis_percentual: item.pPIS || 0,
+              cofins_percentual: item.pCOFINS || 0,
+            })
+            .select('id')
+            .single();
+
+          if (insertErr) throw insertErr;
+          produtoId = (novoProd as any).id;
         }
 
-        if (nfeData.tipo === 'entrada') {
-          await (supabase as any).from('lotes').insert({
-            produto_id: produtoId,
-            fornecedor: nfeData.emitenteNome || '—',
-            preco_custo: item.vUnCom,
-            quantidade: item.qCom,
-            data_entrada: nfeData.dataEmissao || new Date().toISOString(),
-            nfe_chave: nfeData.chaveAcesso,
-          });
-        }
+        // Registra o lote de entrada fiscal
+        await (supabase as any).from('lotes').insert({
+          produto_id: produtoId,
+          fornecedor: nfeData.emitenteNome || '—',
+          preco_custo: Number(item.vUnCom || 0),
+          quantidade: qtdItem,
+          data_entrada: (nfeData.dataEmissao || new Date().toISOString()).split('T')[0],
+          nfe_chave: nfeData.chaveAcesso,
+        });
 
         processados++;
       }
 
-      // 3. Registrar NF-e importada
+      // 3. Registrar ou atualizar NF-e importada
       const { data: { user } } = await supabase.auth.getUser();
-      await (supabase as any).from('nfe_importadas').insert({
+      const nfePayload = {
         chave_acesso: nfeData.chaveAcesso,
         numero: nfeData.numero,
         serie: nfeData.serie,
         emitente_cnpj: nfeData.emitenteCnpj,
         emitente_nome: nfeData.emitenteNome,
         destinatario_cnpj: nfeData.destinatarioCnpj || null,
-        data_emissao: nfeData.dataEmissao,
+        data_emissao: (nfeData.dataEmissao || new Date().toISOString()).split('T')[0],
         valor_total: nfeData.valorTotal,
-        tipo: nfeData.tipo,
+        tipo: 'entrada',
         status: 'processada',
         xml_raw: xmlText,
         imported_by: user?.id,
-      });
+      };
+
+      if (existing) {
+        await (supabase as any).from('nfe_importadas').update(nfePayload).eq('id', existing.id);
+      } else {
+        await (supabase as any).from('nfe_importadas').insert(nfePayload);
+      }
 
       // Invalida cache de produtos no React Query para aparecer imediatamente em /produtos e no balcão!
       queryClient.invalidateQueries({ queryKey: ['produtos'] });
+      queryClient.invalidateQueries({ queryKey: ['produtos-search'] });
       queryClient.invalidateQueries({ queryKey: ['dashboard-produtos'] });
       queryClient.invalidateQueries({ queryKey: ['lotes'] });
       queryClient.invalidateQueries({ queryKey: ['nfe_importadas'] });
 
       setImportedCount(processados);
       setStatus('done');
+      toast({
+        title: 'Entrada no estoque concluída!',
+        description: `${processados} item(ns) criado(s)/somado(s) ao estoque com sucesso.`,
+      });
     } catch (err: any) {
       toast({ title: 'Erro ao importar', description: err.message, variant: 'destructive' });
       setStatus('error');
@@ -1050,7 +1162,7 @@ export default function ImportarNFe({ defaultTab = 'entrada' }: { defaultTab?: '
               <div className="flex items-center gap-2.5 text-amber-800 dark:text-amber-300">
                 <AlertTriangle size={18} className="shrink-0 text-amber-600" />
                 <span>
-                  Existem <strong>{acoes.filter(a => a.acao === 'criar').length} produto(s) novos</strong> nesta nota fiscal. Recomendamos cadastrar a <strong>compatibilidade veicular</strong> para que os vendedores encontrem a peça na busca por veículo do balcão.
+                  Existem <strong>{acoes.filter(a => a.acao === 'criar').length} produto(s) novo(s)</strong> nesta nota fiscal. <strong>Não é necessário criar o item antes:</strong> ao clicar em <em>"Confirmar e Dar Entrada no Estoque"</em> eles serão criados e somados automaticamente, ou clique no botão ao lado para já preencher a <strong>compatibilidade veicular e preço</strong> na própria entrada da nota.
                 </span>
               </div>
               <button
@@ -1063,25 +1175,51 @@ export default function ImportarNFe({ defaultTab = 'entrada' }: { defaultTab?: '
                 }}
                 className="shrink-0 px-3.5 py-2 rounded-lg bg-amber-600 text-white font-semibold hover:bg-amber-700 transition-colors flex items-center gap-1.5 shadow-sm"
               >
-                <Plus size={14} /> Cadastrar Primeiro Novo
+                <Plus size={14} /> Cadastrar Novo na Nota
               </button>
             </div>
           )}
 
           {/* Lista de Produtos da Nota */}
           <div className="rounded-xl border bg-card shadow-sm overflow-hidden">
-            <div className="px-5 py-3.5 border-b flex items-center gap-2">
+            <div className="px-5 py-3.5 border-b flex flex-wrap items-center gap-2">
               <Package size={16} className="text-primary" />
               <h3 className="font-semibold text-sm">Produtos da Nota Fiscal</h3>
               {analisando && <Loader2 size={14} className="animate-spin text-muted-foreground ml-auto" />}
-              {!analisando && acoes.length > 0 && (
-                <div className="ml-auto flex items-center gap-3 text-xs">
-                  <span className="flex items-center gap-1 text-emerald-600 font-semibold">
-                    <PlusCircle size={13} /> {acoes.filter(a => a.acao === 'criar').length} novos
-                  </span>
-                  <span className="flex items-center gap-1 text-blue-600 font-semibold">
-                    <ArrowUpCircle size={13} /> {acoes.filter(a => a.acao === 'atualizar').length} somar ao estoque
-                  </span>
+              {!analisando && (
+                <div className="ml-auto flex flex-wrap items-center gap-3 text-xs">
+                  {acoes.length > 0 && (
+                    <>
+                      <span className="flex items-center gap-1 text-emerald-600 font-semibold">
+                        <PlusCircle size={13} /> {acoes.filter(a => a.acao === 'criar').length} criar na entrada
+                      </span>
+                      <span className="flex items-center gap-1 text-blue-600 font-semibold">
+                        <ArrowUpCircle size={13} /> {acoes.filter(a => a.acao === 'atualizar').length} somar ao estoque
+                      </span>
+                    </>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setItemParaCadastrar({
+                        item: {
+                          cProd: `PRD-${nfeData.numero}-${nfeData.itens.length + 1}`,
+                          xProd: '',
+                          ncm: '',
+                          qCom: 1,
+                          vUnCom: 0,
+                          pICMS: 0,
+                          pIPI: 0,
+                          pPIS: 0,
+                          pCOFINS: 0,
+                        },
+                        index: nfeData.itens.length,
+                      })
+                    }
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border border-primary/40 bg-primary/10 text-primary font-semibold hover:bg-primary/20 transition-colors"
+                  >
+                    <Plus size={13} /> Criar / Adicionar Item na Nota
+                  </button>
                 </div>
               )}
             </div>
@@ -1111,7 +1249,7 @@ export default function ImportarNFe({ defaultTab = 'entrada' }: { defaultTab?: '
                           {acao?.acao === 'criar' && (
                             <div className="flex items-center gap-2 flex-wrap">
                               <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-amber-700 dark:text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded">
-                                <PlusCircle size={11} /> Não Cadastrado (+{it.qCom})
+                                <PlusCircle size={11} /> Criar na entrada (+{it.qCom} un)
                               </span>
                               <button
                                 type="button"
@@ -1132,11 +1270,20 @@ export default function ImportarNFe({ defaultTab = 'entrada' }: { defaultTab?: '
                                     : "bg-blue-500/10 text-blue-700 dark:text-blue-400"
                                 )}>
                                   {acao.jaCadastradoNesteLote ? <CheckCircle2 size={12} /> : <ArrowUpCircle size={12} />}
-                                  {acao.jaCadastradoNesteLote ? 'Cadastrado agora' : 'Já no catálogo'}
+                                  {acao.jaCadastradoNesteLote ? 'Criado & Somado ao Estoque' : 'Já no catálogo (Somar)'}
                                 </span>
                                 <span className="text-[11px] text-muted-foreground font-mono">
                                   Estoque: {acao.estoqueAtual} ➔ <strong className="text-foreground">{acao.estoqueNovo}</strong> (+{it.qCom})
                                 </span>
+                                {!acao.jaCadastradoNesteLote && (
+                                  <button
+                                    type="button"
+                                    onClick={() => setItemParaCadastrar({ item: it, index: idx })}
+                                    className="text-[11px] font-semibold text-primary hover:underline"
+                                  >
+                                    Editar item
+                                  </button>
+                                )}
                               </div>
                               {acao.aplicacao && (
                                 <span className="text-[10px] text-muted-foreground truncate max-w-sm" title={acao.aplicacao}>
@@ -1167,7 +1314,7 @@ export default function ImportarNFe({ defaultTab = 'entrada' }: { defaultTab?: '
             </button>
             <button
               type="button"
-              onClick={handleImport}
+              onClick={() => handleImport(false)}
               className="btn-primary px-6 py-2.5 rounded-lg text-sm font-semibold shadow-sm flex items-center gap-2"
             >
               <CheckCircle size={16} /> Confirmar e Dar Entrada no Estoque
@@ -1185,12 +1332,14 @@ export default function ImportarNFe({ defaultTab = 'entrada' }: { defaultTab?: '
           produto={{
             codigo: itemParaCadastrar.item.cProd,
             codigo_fabrica: itemParaCadastrar.item.cProd,
-            nome: itemParaCadastrar.item.xProd,
-            marca: nfeData?.emitenteNome || '',
+            nome: itemParaCadastrar.item.xProd.includes('PECA AUTOMOTIVA RECEBIDA VIA SEFAZ') ? '' : itemParaCadastrar.item.xProd,
+            marca: nfeData?.emitenteNome && !nfeData.emitenteNome.includes('DISTRIBUIDORA / FORNECEDOR') ? nfeData.emitenteNome : '',
             ncm: itemParaCadastrar.item.ncm || '',
             preco_custo: itemParaCadastrar.item.vUnCom,
             preco_venda: Math.round(itemParaCadastrar.item.vUnCom * 1.5 * 100) / 100,
-            markup_percentual: 50,
+            markup_percentual: Number(config?.markup_padrao || 50) || 50,
+            quantidade_inicial: Math.max(1, Math.round(Number(itemParaCadastrar.item.qCom || 1))),
+            fornecedor_inicial: nfeData?.emitenteNome && !nfeData.emitenteNome.includes('DISTRIBUIDORA / FORNECEDOR') ? nfeData.emitenteNome : '',
             tipo_veiculo: 'Carro',
             categoria: 'Geral',
             aplicacao: '',
@@ -1254,17 +1403,26 @@ export default function ImportarNFe({ defaultTab = 'entrada' }: { defaultTab?: '
       {status === 'duplicate' && (
         <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-6 text-center space-y-3 shadow-sm animate-fade-in">
           <AlertTriangle size={32} className="mx-auto text-amber-600" />
-          <h2 className="text-lg font-bold text-foreground">Esta NF-e Já Foi Importada Anteriormente!</h2>
+          <h2 className="text-lg font-bold text-foreground">Esta NF-e Já Consta no Histórico</h2>
           <p className="text-sm text-muted-foreground max-w-md mx-auto">
-            A chave de acesso desta nota fiscal já consta no banco de dados e seus itens já foram computados no estoque para evitar duplicidade.
+            A chave de acesso desta nota fiscal já foi registrada anteriormente. Caso os itens ainda não tenham sido somados ao estoque, clique em <strong>Reprocessar e Somar ao Estoque</strong> abaixo.
           </p>
-          <button
-            type="button"
-            onClick={reset}
-            className="px-4 py-2 rounded-lg border text-sm font-semibold hover:bg-muted"
-          >
-            Voltar
-          </button>
+          <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
+            <button
+              type="button"
+              onClick={reset}
+              className="px-4 py-2 rounded-lg border text-sm font-semibold hover:bg-muted"
+            >
+              Voltar
+            </button>
+            <button
+              type="button"
+              onClick={() => handleImport(true)}
+              className="btn-primary px-5 py-2 rounded-lg text-sm font-semibold flex items-center gap-2 shadow-sm"
+            >
+              <RefreshCw size={15} /> Reprocessar e Somar Itens ao Estoque
+            </button>
+          </div>
         </div>
       )}
       </div>

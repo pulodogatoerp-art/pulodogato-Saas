@@ -25,6 +25,9 @@ export interface ProdutoModalData {
   preco_venda: number;
   markup_percentual: number;
   estoque_minimo: number;
+  estoque_total?: number;
+  quantidade_inicial?: number;
+  fornecedor_inicial?: string;
   categoria: string;
   tipo_veiculo: string;
   icms_percentual: number;
@@ -37,6 +40,16 @@ export interface ProdutoModalData {
   imagens?: string[] | null;
   localizacao?: string | null;
 }
+
+const parseNum = (val: string | number | undefined | null): number => {
+  if (typeof val === 'number') return Number.isFinite(val) ? val : 0;
+  if (!val) return 0;
+  const str = String(val).trim();
+  const normalized = str.includes(',') && str.includes('.')
+    ? str.replace(/\./g, '').replace(',', '.')
+    : str.replace(',', '.');
+  return parseFloat(normalized) || 0;
+};
 
 export interface ProdutoModalProps {
   produto?: ProdutoModalData;
@@ -132,7 +145,7 @@ export default function ProdutoModal({
         freteCusto: produto.frete_custo ? produto.frete_custo.toString() : '',
         precoVenda: produto.preco_venda?.toString() || '',
         markup: produto.markup_percentual?.toString() || markupPadrao,
-        estoqueMinimo: produto.estoque_minimo?.toString() || '',
+        estoqueMinimo: produto.estoque_minimo?.toString() || '1',
         categoria: produto.categoria || categoriasDefault[0],
         codigoFabrica: produto.codigo_fabrica || '',
         tipoVeiculo: produto.tipo_veiculo || 'Carro',
@@ -141,8 +154,8 @@ export default function ProdutoModal({
         ipi: produto.ipi_percentual?.toString() || '',
         pis: produto.pis_percentual?.toString() || '',
         cofins: produto.cofins_percentual?.toString() || '',
-        fornecedor: '',
-        quantidadeInicial: '',
+        fornecedor: produto.fornecedor_inicial || '',
+        quantidadeInicial: produto.quantidade_inicial !== undefined ? String(produto.quantidade_inicial) : '',
       };
     }
     try {
@@ -158,7 +171,7 @@ export default function ProdutoModal({
       freteCusto: '',
       precoVenda: '',
       markup: markupPadrao,
-      estoqueMinimo: '',
+      estoqueMinimo: '1',
       categoria: categoriasDefault[0],
       codigoFabrica: '',
       tipoVeiculo: 'Carro',
@@ -168,7 +181,7 @@ export default function ProdutoModal({
       pis: '',
       cofins: '',
       fornecedor: '',
-      quantidadeInicial: '',
+      quantidadeInicial: '1',
     };
   };
 
@@ -185,7 +198,7 @@ export default function ProdutoModal({
         freteCusto: produto.frete_custo ? produto.frete_custo.toString() : '',
         precoVenda: produto.preco_venda?.toString() || '',
         markup: produto.markup_percentual?.toString() || markupPadrao,
-        estoqueMinimo: produto.estoque_minimo?.toString() || '',
+        estoqueMinimo: produto.estoque_minimo?.toString() || '1',
         categoria: produto.categoria || categoriasDefault[0],
         codigoFabrica: produto.codigo_fabrica || '',
         tipoVeiculo: produto.tipo_veiculo || 'Carro',
@@ -194,11 +207,11 @@ export default function ProdutoModal({
         ipi: produto.ipi_percentual?.toString() || '',
         pis: produto.pis_percentual?.toString() || '',
         cofins: produto.cofins_percentual?.toString() || '',
-        fornecedor: '',
-        quantidadeInicial: '',
+        fornecedor: produto.fornecedor_inicial || '',
+        quantidadeInicial: produto.quantidade_inicial !== undefined ? String(produto.quantidade_inicial) : '',
       });
     }
-  }, [produto, markupPadrao]);
+  }, [produto?.id, produto?.codigo, markupPadrao]);
 
   useEffect(() => {
     if (!produto && (form.nome || form.codigoFabrica || form.precoVenda)) {
@@ -226,14 +239,14 @@ export default function ProdutoModal({
     setForm(f => {
       const updated = { ...f, [name]: value };
       if (['precoCusto', 'freteCusto', 'markup', 'icms', 'ipi', 'pis', 'cofins'].includes(name)) {
-        const custoBase = parseFloat(name === 'precoCusto' ? value : updated.precoCusto) || 0;
-        const frete = parseFloat(name === 'freteCusto' ? value : updated.freteCusto) || 0;
+        const custoBase = parseNum(name === 'precoCusto' ? value : updated.precoCusto);
+        const frete = parseNum(name === 'freteCusto' ? value : updated.freteCusto);
         const custo = custoBase + frete;
-        const markup = parseFloat(name === 'markup' ? value : updated.markup) || 0;
-        const icms = parseFloat(name === 'icms' ? value : updated.icms) || 0;
-        const ipi = parseFloat(name === 'ipi' ? value : updated.ipi) || 0;
-        const pis = parseFloat(name === 'pis' ? value : updated.pis) || 0;
-        const cofins = parseFloat(name === 'cofins' ? value : updated.cofins) || 0;
+        const markup = parseNum(name === 'markup' ? value : updated.markup);
+        const icms = parseNum(name === 'icms' ? value : updated.icms);
+        const ipi = parseNum(name === 'ipi' ? value : updated.ipi);
+        const pis = parseNum(name === 'pis' ? value : updated.pis);
+        const cofins = parseNum(name === 'cofins' ? value : updated.cofins);
         if (custo > 0) {
           const totalImpostos = icms + ipi + pis + cofins;
           const precoVenda = custo * (1 + totalImpostos / 100) * (1 + markup / 100);
@@ -328,9 +341,10 @@ export default function ProdutoModal({
       toast({ title: 'Preencha o nome do produto', variant: 'destructive' });
       return;
     }
-    const precoCustoNum = parseFloat(form.precoCusto) || 0;
-    const freteCustoNum = parseFloat(form.freteCusto) || 0;
+    const precoCustoNum = parseNum(form.precoCusto);
+    const freteCustoNum = parseNum(form.freteCusto);
     const custoTotal = precoCustoNum + freteCustoNum;
+    const qtdInformada = Math.max(0, Math.round(parseNum(form.quantidadeInicial)));
 
     const codFab = form.codigoFabrica.trim();
     const codPrincipal = produto?.codigo || codFab || `PRD-${Date.now().toString().slice(-6)}`;
@@ -347,22 +361,22 @@ export default function ProdutoModal({
       marca: form.marca.trim() || 'Geral',
       aplicacao: form.aplicacao.trim() || 'A definir / Consultar catálogo',
       ncm: form.ncm.trim(),
-      preco_venda: parseFloat(form.precoVenda) || 0,
-      markup_percentual: parseFloat(form.markup) || 0,
-      estoque_minimo: parseInt(form.estoqueMinimo) || 0,
+      preco_venda: parseNum(form.precoVenda),
+      markup_percentual: parseNum(form.markup),
+      estoque_minimo: Math.max(0, Math.round(parseNum(form.estoqueMinimo))),
       categoria: form.categoria,
       tipo_veiculo: form.tipoVeiculo,
       localizacao: form.localizacao.trim() || 'Corredor A-Prateleira 01-G-01',
-      icms_percentual: parseFloat(form.icms) || 0,
-      ipi_percentual: parseFloat(form.ipi) || 0,
-      pis_percentual: parseFloat(form.pis) || 0,
-      cofins_percentual: parseFloat(form.cofins) || 0,
+      icms_percentual: parseNum(form.icms),
+      ipi_percentual: parseNum(form.ipi),
+      pis_percentual: parseNum(form.pis),
+      cofins_percentual: parseNum(form.cofins),
       imagens: imagens,
       imagem_url: imagens[0] || null, // Primeira imagem é a capa/principal
       _lote: {
-        fornecedor: form.fornecedor.trim(),
+        fornecedor: form.fornecedor.trim() || form.marca.trim() || '—',
         preco_custo: custoTotal,
-        quantidade: parseInt(form.quantidadeInicial) || 0,
+        quantidade: qtdInformada,
       },
     });
   };
@@ -370,17 +384,17 @@ export default function ProdutoModal({
   const inputClass = "w-full rounded-lg border px-3 py-2 text-xs sm:text-sm bg-background focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary transition-all";
 
   const calc = useMemo(() => {
-    const custoBase = parseFloat(form.precoCusto) || 0;
-    const frete = parseFloat(form.freteCusto) || 0;
+    const custoBase = parseNum(form.precoCusto);
+    const frete = parseNum(form.freteCusto);
     const custo = custoBase + frete;
-    const markup = parseFloat(form.markup) || 0;
-    const icms = parseFloat(form.icms) || 0;
-    const ipi = parseFloat(form.ipi) || 0;
-    const pis = parseFloat(form.pis) || 0;
-    const cofins = parseFloat(form.cofins) || 0;
+    const markup = parseNum(form.markup);
+    const icms = parseNum(form.icms);
+    const ipi = parseNum(form.ipi);
+    const pis = parseNum(form.pis);
+    const cofins = parseNum(form.cofins);
     const totalImpostosPct = icms + ipi + pis + cofins;
     const precoSugerido = custo > 0 ? custo * (1 + totalImpostosPct / 100) * (1 + markup / 100) : 0;
-    const precoNegociado = parseFloat(simPrecoVenda) || precoSugerido;
+    const precoNegociado = parseNum(simPrecoVenda) || precoSugerido;
     const impostosValor = precoNegociado * (totalImpostosPct / 100);
     const lucroBruto = precoNegociado - custo;
     const lucroLiquido = precoNegociado - custo - impostosValor;
@@ -397,10 +411,10 @@ export default function ProdutoModal({
       `Simulação de Cálculo de Custo${form.nome ? ` — ${form.nome}` : ''}`,
       `Data: ${new Date().toLocaleString('pt-BR')}`,
       '',
-      `Custo: ${fmt(parseFloat(form.precoCusto) || 0)}`,
-      `Frete: ${fmt(parseFloat(form.freteCusto) || 0)}`,
+      `Custo: ${fmt(parseNum(form.precoCusto))}`,
+      `Frete: ${fmt(parseNum(form.freteCusto))}`,
       `Custo total: ${fmt(calc.custo)}`,
-      `Markup: ${(parseFloat(form.markup) || 0).toFixed(2)}%`,
+      `Markup: ${parseNum(form.markup).toFixed(2)}%`,
       `Impostos: ${fmt(calc.impostosValor)}`,
       `Preço sugerido: ${fmt(calc.precoSugerido)}`,
       `Preço negociado: ${fmt(calc.precoNegociado)}`,
@@ -422,14 +436,14 @@ export default function ProdutoModal({
       id: `sim-${Date.now()}`,
       produto_nome: form.nome.trim() || 'Produto sem nome',
       data: new Date().toISOString(),
-      preco_custo: parseFloat(form.precoCusto) || 0,
-      frete_custo: parseFloat(form.freteCusto) || 0,
+      preco_custo: parseNum(form.precoCusto),
+      frete_custo: parseNum(form.freteCusto),
       custo_total: calc.custo,
-      markup: parseFloat(form.markup) || 0,
-      icms: parseFloat(form.icms) || 0,
-      ipi: parseFloat(form.ipi) || 0,
-      pis: parseFloat(form.pis) || 0,
-      cofins: parseFloat(form.cofins) || 0,
+      markup: parseNum(form.markup),
+      icms: parseNum(form.icms),
+      ipi: parseNum(form.ipi),
+      pis: parseNum(form.pis),
+      cofins: parseNum(form.cofins),
       total_impostos_pct: calc.totalImpostosPct,
       impostos_valor: calc.impostosValor,
       preco_sugerido: calc.precoSugerido,
@@ -835,14 +849,17 @@ export default function ProdutoModal({
 
             <div>
               <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">
-                Qtd Inicial em Estoque
+                {produto?.id
+                  ? `Somar Qtd ao Estoque (Atual: ${produto.estoque_total ?? 0})`
+                  : 'Qtd de Entrada no Estoque'}
               </label>
               <input
                 name="quantidadeInicial"
                 type="number"
+                min="0"
                 value={form.quantidadeInicial}
                 onChange={handleChange}
-                placeholder="0"
+                placeholder={produto?.id ? '0 (digite para somar)' : '1'}
                 className={inputClass}
               />
             </div>

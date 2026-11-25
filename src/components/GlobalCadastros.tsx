@@ -51,11 +51,24 @@ export default function GlobalCadastros() {
         }
       }
 
-      let insertedId = produtoData?.id;
+      const qtdLote = Math.max(0, Math.round(Number(lote?.quantidade || 0)));
+      const custoLote = Number(lote?.preco_custo || 0);
+      const fornLote = (lote?.fornecedor || cleanPayload.marca || '—').trim();
+
       let savedProduct: any = null;
 
       if (produtoData?.id) {
-        // Atualização de produto existente
+        // Atualização de produto existente: se informou quantidade, soma ao estoque atual
+        if (qtdLote > 0) {
+          const { data: atual } = await (supabase as any)
+            .from('produtos')
+            .select('estoque_total')
+            .eq('id', produtoData.id)
+            .maybeSingle();
+          const estoquePrevio = Number(atual?.estoque_total ?? produtoData.estoque_total ?? 0);
+          cleanPayload.estoque_total = estoquePrevio + qtdLote;
+        }
+
         const { data: updated, error } = await (supabase as any)
           .from('produtos')
           .update(cleanPayload)
@@ -64,37 +77,85 @@ export default function GlobalCadastros() {
           .single();
         if (error) throw error;
         savedProduct = updated;
-        toast({ title: 'Peça atualizada com sucesso!' });
-      } else {
-        // Novo cadastro de produto
-        const { data: inserted, error } = await (supabase as any)
-          .from('produtos')
-          .insert(cleanPayload)
-          .select()
-          .single();
-        if (error) throw error;
-        savedProduct = inserted;
-        insertedId = inserted.id;
 
-        // Se informou lote inicial
-        if (inserted && lote && (lote.fornecedor || lote.preco_custo > 0 || lote.quantidade > 0)) {
+        if (qtdLote > 0 || custoLote > 0) {
           await (supabase as any).from('lotes').insert({
-            produto_id: inserted.id,
-            fornecedor: lote.fornecedor || '—',
-            preco_custo: lote.preco_custo || 0,
-            quantidade: lote.quantidade || 0,
+            produto_id: produtoData.id,
+            fornecedor: fornLote,
+            preco_custo: custoLote,
+            quantidade: qtdLote,
           });
+        }
 
-          if (lote.quantidade > 0) {
-            await (supabase as any)
-              .from('produtos')
-              .update({ estoque_total: lote.quantidade })
-              .eq('id', inserted.id);
-            savedProduct.estoque_total = lote.quantidade;
+        toast({
+          title: 'Peça atualizada com sucesso!',
+          description: qtdLote > 0 ? `+${qtdLote} un somada(s) ao estoque (Total: ${savedProduct.estoque_total}).` : undefined,
+        });
+      } else {
+        // Verifica se já existe peça com o mesmo código para somar ao estoque em vez de dar erro de duplicidade
+        const codBusca = (cleanPayload.codigo || '').trim();
+        let prodExistente: any = null;
+        if (codBusca) {
+          const { data: found } = await (supabase as any)
+            .from('produtos')
+            .select('id, estoque_total')
+            .eq('codigo', codBusca)
+            .limit(1);
+          if (found && found.length > 0) {
+            prodExistente = found[0];
           }
         }
 
-        toast({ title: 'Peça cadastrada com sucesso!' });
+        if (prodExistente) {
+          const novoEstoque = Number(prodExistente.estoque_total || 0) + qtdLote;
+          cleanPayload.estoque_total = novoEstoque;
+          const { data: updated, error } = await (supabase as any)
+            .from('produtos')
+            .update(cleanPayload)
+            .eq('id', prodExistente.id)
+            .select()
+            .single();
+          if (error) throw error;
+          savedProduct = updated;
+
+          if (qtdLote > 0 || custoLote > 0) {
+            await (supabase as any).from('lotes').insert({
+              produto_id: prodExistente.id,
+              fornecedor: fornLote,
+              preco_custo: custoLote,
+              quantidade: qtdLote,
+            });
+          }
+
+          toast({
+            title: 'Estoque somado ao produto existente!',
+            description: `${savedProduct.nome}: +${qtdLote} un (Estoque atual: ${novoEstoque}).`,
+          });
+        } else {
+          // Novo cadastro de produto já com estoque_total definido
+          cleanPayload.estoque_total = qtdLote;
+          const { data: inserted, error } = await (supabase as any)
+            .from('produtos')
+            .insert(cleanPayload)
+            .select()
+            .single();
+          if (error) throw error;
+          savedProduct = inserted;
+
+          if (inserted && (fornLote || custoLote > 0 || qtdLote > 0)) {
+            await (supabase as any).from('lotes').insert({
+              produto_id: inserted.id,
+              fornecedor: fornLote,
+              preco_custo: custoLote,
+              quantidade: qtdLote,
+            });
+          }
+
+          toast({
+            title: 'Peça cadastrada com sucesso!',
+            description: `Estoque inicial registrado: ${qtdLote} un.`,
+          });
+        }
       }
 
       // Invalida cache de produtos no React Query
