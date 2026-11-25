@@ -7,6 +7,7 @@ import { useToast } from '@/hooks/use-toast';
 import { cn } from '@/lib/utils';
 import logoMgn from '@/assets/logo-mgn.png';
 import ProdutoModal, { SimulacaoCustoSnapshot } from '@/components/ProdutoModal';
+import { useCadastroModal } from '@/contexts/CadastroModalContext';
 import BuscaPecasIA from '@/components/BuscaPecasIA';
 import DanfeModal from '@/components/DanfeModal';
 import DanfeNfceModal from '@/components/DanfeNfceModal';
@@ -152,7 +153,7 @@ function useLucroOrcamento(itens: ItemOrcamentoDB[] | undefined, enabled: boolea
       const [prodRes, lotesRes] = await Promise.all([
         supabase
           .from('produtos')
-          .select('id, icms_percentual, pis_percentual, cofins_percentual, ipi_percentual, preco_custo, frete_custo')
+          .select('id, icms_percentual, pis_percentual, cofins_percentual, ipi_percentual')
           .in('id', ids),
         supabase
           .from('lotes')
@@ -161,10 +162,6 @@ function useLucroOrcamento(itens: ItemOrcamentoDB[] | undefined, enabled: boolea
           .order('created_at', { ascending: false }),
       ]);
       const custoPorProduto: Record<string, number> = {};
-      (prodRes.data ?? []).forEach((p: any) => {
-        const base = (Number(p.preco_custo) || 0) + (Number(p.frete_custo) || 0);
-        if (base > 0) custoPorProduto[p.id] = base;
-      });
       (lotesRes.data ?? []).forEach((l: any) => {
         if (custoPorProduto[l.produto_id] === undefined) {
           custoPorProduto[l.produto_id] = Number(l.preco_custo) || 0;
@@ -192,7 +189,7 @@ function useLucroPorIds(ids: string[], enabled: boolean) {
       const [prodRes, lotesRes] = await Promise.all([
         supabase
           .from('produtos')
-          .select('id, icms_percentual, pis_percentual, cofins_percentual, ipi_percentual, preco_custo, frete_custo')
+          .select('id, icms_percentual, pis_percentual, cofins_percentual, ipi_percentual')
           .in('id', ids),
         supabase
           .from('lotes')
@@ -201,10 +198,6 @@ function useLucroPorIds(ids: string[], enabled: boolean) {
           .order('created_at', { ascending: false }),
       ]);
       const custoPorProduto: Record<string, number> = {};
-      (prodRes.data ?? []).forEach((p: any) => {
-        const base = (Number(p.preco_custo) || 0) + (Number(p.frete_custo) || 0);
-        if (base > 0) custoPorProduto[p.id] = base;
-      });
       (lotesRes.data ?? []).forEach((l: any) => {
         if (custoPorProduto[l.produto_id] === undefined) {
           custoPorProduto[l.produto_id] = Number(l.preco_custo) || 0;
@@ -452,6 +445,7 @@ export default function Orcamentos() {
   const [freteTransportadora, setFreteTransportadora] = useState('');
   const [freteValor, setFreteValor] = useState(0);
   const [simulacoes, setSimulacoes] = useState<SimulacaoCustoSnapshot[]>([]);
+  const { openProdutoModal, openClienteModal } = useCadastroModal();
   const [showClienteDD, setShowClienteDD] = useState(false);
   const [showProdutoDD, setShowProdutoDD] = useState(false);
   const [showNovoCliente, setShowNovoCliente] = useState(false);
@@ -577,6 +571,8 @@ export default function Orcamentos() {
     try {
       const lote = data._lote;
       delete data._lote;
+      delete data.preco_custo;
+      delete data.frete_custo;
       const { data: inserted, error } = await (supabase as any)
         .from('produtos')
         .insert(data)
@@ -1806,8 +1802,8 @@ export default function Orcamentos() {
                   </div>
                   <button
                     type="button"
-                    onClick={() => setShowNovoCliente(true)}
-                    title="Cadastrar novo cliente"
+                    onClick={() => openClienteModal(undefined, (c) => { if (c) setClienteSelecionado(c as any); })}
+                    title="Cadastrar novo cliente (permanece aberto ao sair da página)"
                     aria-label="Cadastrar novo cliente"
                     className="shrink-0 inline-flex items-center justify-center rounded-xl bg-primary text-primary-foreground px-3 hover:bg-primary/90 transition-colors"
                   >
@@ -1853,8 +1849,8 @@ export default function Orcamentos() {
               </div>
               <button
                 type="button"
-                onClick={() => setShowNovoProduto(true)}
-                title="Cadastrar novo produto"
+                onClick={() => openProdutoModal(undefined, (p) => { if (p) addItem(p as any); })}
+                title="Cadastrar novo produto (permanece aberto ao sair da página)"
                 aria-label="Cadastrar novo produto"
                 className="shrink-0 inline-flex items-center justify-center rounded-xl bg-primary text-primary-foreground px-3 hover:bg-primary/90 transition-colors"
               >
@@ -2083,63 +2079,6 @@ export default function Orcamentos() {
           </div>
         </div>
       </div>
-
-      {showNovoCliente && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setShowNovoCliente(false)} />
-          <div className="relative bg-background rounded-2xl shadow-lg w-full max-w-md">
-            <div className="flex items-center justify-between px-5 py-3.5 border-b">
-              <h3 className="font-bold text-base">Novo Cliente</h3>
-              <button onClick={() => setShowNovoCliente(false)} className="p-1.5 rounded-lg hover:bg-muted">
-                <X size={16} />
-              </button>
-            </div>
-            <div className="p-5 space-y-3">
-              {([
-                { k: 'nome', label: 'Nome *' },
-                { k: 'cpf_cnpj', label: 'CPF / CNPJ' },
-                { k: 'telefone', label: 'Telefone / WhatsApp' },
-                { k: 'email', label: 'E-mail' },
-                { k: 'endereco', label: 'Endereço' },
-              ] as const).map(({ k, label }) => (
-                <div key={k}>
-                  <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">{label}</label>
-                  <input
-                    value={(novoCliente as any)[k]}
-                    onChange={e => setNovoCliente(p => ({ ...p, [k]: e.target.value }))}
-                    className="w-full rounded-lg border px-3 py-2 text-sm bg-background focus:outline-none focus:ring-2 focus:ring-primary/30"
-                  />
-                </div>
-              ))}
-            </div>
-            <div className="flex gap-2 px-5 py-3 border-t">
-              <button onClick={() => setShowNovoCliente(false)} className="flex-1 rounded-lg border px-4 py-2 text-sm font-medium hover:bg-muted">
-                Cancelar
-              </button>
-              <button
-                onClick={cadastrarCliente}
-                disabled={savingCliente}
-                className="flex-1 rounded-lg bg-primary text-primary-foreground px-4 py-2 text-sm font-semibold hover:opacity-90 disabled:opacity-50 flex items-center justify-center gap-2"
-              >
-                {savingCliente && <Loader2 size={13} className="animate-spin" />}
-                Cadastrar
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {showNovoProduto && (
-        <ProdutoModal
-          onClose={() => setShowNovoProduto(false)}
-          onSave={cadastrarProduto}
-          saving={savingProduto}
-          markupPadrao={markupPadrao ?? '30'}
-          customCategorias={categoriasDisponiveis}
-          onSaveSimulacao={role === 'admin' ? (snap) => setSimulacoes(s => [...s, snap]) : undefined}
-          orcamentoLabel={editingOrcId ? 'edição' : 'novo'}
-        />
-      )}
 
       {/* Modais de Impressão Fiscal */}
       {danfeAtivo && danfeAtivo.resultado.tipo === 'nfce' && (

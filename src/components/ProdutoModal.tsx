@@ -1,7 +1,8 @@
-import React, { useState, useMemo, useRef } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import {
   Plus, X, Loader2, Calculator, FileText, TrendingUp, TrendingDown,
-  Copy, Save, Upload, Link as LinkIcon, Image as ImageIcon, Sparkles, CheckCircle2, Trash2
+  Copy, Save, Upload, Link as LinkIcon, Image as ImageIcon, Sparkles, CheckCircle2, Trash2,
+  Minus, Maximize2, Package
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { toast } from '@/hooks/use-toast';
@@ -39,6 +40,10 @@ export interface ProdutoModalData {
 
 export interface ProdutoModalProps {
   produto?: ProdutoModalData;
+  isOpen?: boolean;
+  isMinimized?: boolean;
+  onMinimize?: () => void;
+  onRestore?: () => void;
   onClose: () => void;
   onSave: (data: Record<string, any>) => void;
   saving?: boolean;
@@ -71,8 +76,14 @@ export interface SimulacaoCustoSnapshot {
   markup_real: number;
 }
 
+const DRAFT_PROD_KEY = 'mgn_draft_produto';
+
 export default function ProdutoModal({
   produto,
+  isOpen = true,
+  isMinimized = false,
+  onMinimize,
+  onRestore,
   onClose,
   onSave,
   saving,
@@ -110,27 +121,92 @@ export default function ProdutoModal({
   const [uploadingImage, setUploadingImage] = useState(false);
   const [compressionInfo, setCompressionInfo] = useState<string | null>(null);
 
-  const [form, setForm] = useState({
-    nome: produto?.nome || '',
-    marca: produto?.marca || '',
-    aplicacao: produto?.aplicacao || '',
-    ncm: produto?.ncm || '',
-    precoCusto: produto?.preco_custo ? produto.preco_custo.toString() : '',
-    freteCusto: produto?.frete_custo ? produto.frete_custo.toString() : '',
-    precoVenda: produto?.preco_venda?.toString() || '',
-    markup: produto?.markup_percentual?.toString() || markupPadrao,
-    estoqueMinimo: produto?.estoque_minimo?.toString() || '',
-    categoria: produto?.categoria || categoriasDefault[0],
-    codigoFabrica: produto?.codigo_fabrica || '',
-    tipoVeiculo: produto?.tipo_veiculo || 'Carro',
-    localizacao: produto?.localizacao || 'Corredor A-Prateleira 01-G-01',
-    icms: produto?.icms_percentual?.toString() || '',
-    ipi: produto?.ipi_percentual?.toString() || '',
-    pis: produto?.pis_percentual?.toString() || '',
-    cofins: produto?.cofins_percentual?.toString() || '',
-    fornecedor: '',
-    quantidadeInicial: '',
-  });
+  const getInitialForm = () => {
+    if (produto) {
+      return {
+        nome: produto.nome || '',
+        marca: produto.marca || '',
+        aplicacao: produto.aplicacao || '',
+        ncm: produto.ncm || '',
+        precoCusto: produto.preco_custo ? produto.preco_custo.toString() : '',
+        freteCusto: produto.frete_custo ? produto.frete_custo.toString() : '',
+        precoVenda: produto.preco_venda?.toString() || '',
+        markup: produto.markup_percentual?.toString() || markupPadrao,
+        estoqueMinimo: produto.estoque_minimo?.toString() || '',
+        categoria: produto.categoria || categoriasDefault[0],
+        codigoFabrica: produto.codigo_fabrica || '',
+        tipoVeiculo: produto.tipo_veiculo || 'Carro',
+        localizacao: produto.localizacao || 'Corredor A-Prateleira 01-G-01',
+        icms: produto.icms_percentual?.toString() || '',
+        ipi: produto.ipi_percentual?.toString() || '',
+        pis: produto.pis_percentual?.toString() || '',
+        cofins: produto.cofins_percentual?.toString() || '',
+        fornecedor: '',
+        quantidadeInicial: '',
+      };
+    }
+    try {
+      const saved = localStorage.getItem(DRAFT_PROD_KEY);
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return {
+      nome: '',
+      marca: '',
+      aplicacao: '',
+      ncm: '',
+      precoCusto: '',
+      freteCusto: '',
+      precoVenda: '',
+      markup: markupPadrao,
+      estoqueMinimo: '',
+      categoria: categoriasDefault[0],
+      codigoFabrica: '',
+      tipoVeiculo: 'Carro',
+      localizacao: 'Corredor A-Prateleira 01-G-01',
+      icms: '',
+      ipi: '',
+      pis: '',
+      cofins: '',
+      fornecedor: '',
+      quantidadeInicial: '',
+    };
+  };
+
+  const [form, setForm] = useState(getInitialForm);
+
+  useEffect(() => {
+    if (produto) {
+      setForm({
+        nome: produto.nome || '',
+        marca: produto.marca || '',
+        aplicacao: produto.aplicacao || '',
+        ncm: produto.ncm || '',
+        precoCusto: produto.preco_custo ? produto.preco_custo.toString() : '',
+        freteCusto: produto.frete_custo ? produto.frete_custo.toString() : '',
+        precoVenda: produto.preco_venda?.toString() || '',
+        markup: produto.markup_percentual?.toString() || markupPadrao,
+        estoqueMinimo: produto.estoque_minimo?.toString() || '',
+        categoria: produto.categoria || categoriasDefault[0],
+        codigoFabrica: produto.codigo_fabrica || '',
+        tipoVeiculo: produto.tipo_veiculo || 'Carro',
+        localizacao: produto.localizacao || 'Corredor A-Prateleira 01-G-01',
+        icms: produto.icms_percentual?.toString() || '',
+        ipi: produto.ipi_percentual?.toString() || '',
+        pis: produto.pis_percentual?.toString() || '',
+        cofins: produto.cofins_percentual?.toString() || '',
+        fornecedor: '',
+        quantidadeInicial: '',
+      });
+    }
+  }, [produto, markupPadrao]);
+
+  useEffect(() => {
+    if (!produto && (form.nome || form.codigoFabrica || form.precoVenda)) {
+      try {
+        localStorage.setItem(DRAFT_PROD_KEY, JSON.stringify(form));
+      } catch {}
+    }
+  }, [form, produto]);
 
   const handleAddCategory = () => {
     const trimmed = newCat.trim();
@@ -259,6 +335,10 @@ export default function ProdutoModal({
     const codFab = form.codigoFabrica.trim();
     const codPrincipal = produto?.codigo || codFab || `PRD-${Date.now().toString().slice(-6)}`;
 
+    try {
+      localStorage.removeItem(DRAFT_PROD_KEY);
+    } catch {}
+
     onSave({
       codigo: codPrincipal,
       codigo_fabrica: codFab,
@@ -277,8 +357,6 @@ export default function ProdutoModal({
       ipi_percentual: parseFloat(form.ipi) || 0,
       pis_percentual: parseFloat(form.pis) || 0,
       cofins_percentual: parseFloat(form.cofins) || 0,
-      preco_custo: precoCustoNum,
-      frete_custo: freteCustoNum,
       imagens: imagens,
       imagem_url: imagens[0] || null, // Primeira imagem é a capa/principal
       _lote: {
@@ -366,6 +444,48 @@ export default function ProdutoModal({
     toast({ title: 'Simulação vinculada ao orçamento!' });
   };
 
+  if (!isOpen) return null;
+
+  if (isMinimized) {
+    return (
+      <div
+        onClick={onRestore}
+        className="fixed bottom-4 right-4 z-50 flex items-center gap-3 bg-card border-2 border-primary/50 shadow-2xl rounded-2xl p-3 px-4 cursor-pointer hover:border-primary transition-all animate-bounce-in max-w-sm"
+        style={{ boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.3)' }}
+      >
+        <div className="p-2 rounded-xl bg-primary/10 text-primary">
+          <Package size={20} />
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-primary">
+            {produto ? 'Editando Peça' : 'Cadastrando Peça (Aberta)'}
+          </p>
+          <p className="text-sm font-medium text-foreground truncate">
+            {form.nome.trim() || 'Nova Peça (clique para expandir)'}
+          </p>
+        </div>
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onRestore?.(); }}
+            className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground hover:text-foreground"
+            title="Restaurar / Abrir Janela"
+          >
+            <Maximize2 size={16} />
+          </button>
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onClose(); }}
+            className="p-1.5 rounded-lg hover:bg-destructive/10 text-muted-foreground hover:text-destructive"
+            title="Fechar"
+          >
+            <X size={16} />
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-fade-in">
       <div className="relative bg-background rounded-2xl shadow-xl w-full max-w-2xl border overflow-hidden flex flex-col max-h-[90vh]">
@@ -390,9 +510,21 @@ export default function ProdutoModal({
               </button>
             </div>
           </div>
-          <button onClick={onClose} className="p-1 rounded-lg hover:bg-muted text-muted-foreground">
-            <X size={18} />
-          </button>
+          <div className="flex items-center gap-1">
+            {onMinimize && (
+              <button
+                type="button"
+                onClick={onMinimize}
+                className="p-1 rounded-lg hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+                title="Minimizar janela para navegar livremente pelo sistema"
+              >
+                <Minus size={18} />
+              </button>
+            )}
+            <button onClick={onClose} className="p-1 rounded-lg hover:bg-muted text-muted-foreground hover:text-foreground transition-colors" title="Fechar">
+              <X size={18} />
+            </button>
+          </div>
         </div>
 
         {tab === 'cadastro' && (
@@ -795,8 +927,12 @@ export default function ProdutoModal({
 
         {/* Footer */}
         <div className="flex gap-3 px-6 py-3.5 border-t bg-muted/10">
-          <button onClick={onClose} className="flex-1 rounded-xl border px-4 py-2 text-xs font-semibold hover:bg-muted transition-colors">
-            Cancelar
+          <button
+            type="button"
+            onClick={onMinimize || onClose}
+            className="flex-1 rounded-xl border px-4 py-2 text-xs font-semibold hover:bg-muted transition-colors text-muted-foreground"
+          >
+            {onMinimize ? 'Minimizar' : 'Cancelar'}
           </button>
           <button
             onClick={handleSubmit}

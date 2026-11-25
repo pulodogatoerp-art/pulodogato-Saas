@@ -10,6 +10,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from '@/hooks/use-toast';
 import ProdutoModal from '@/components/ProdutoModal';
+import { useCadastroModal } from '@/contexts/CadastroModalContext';
 import { exportToCsv, exportToExcel } from '@/lib/export';
 import { useNavigate } from 'react-router-dom';
 
@@ -84,6 +85,7 @@ export default function Produtos() {
   const isAdmin = userRole === 'admin';
   const queryClient = useQueryClient();
   const navigate = useNavigate();
+  const { openProdutoModal } = useCadastroModal();
 
   // Estados de busca e filtros
   const [search, setSearch] = useState('');
@@ -159,13 +161,32 @@ export default function Produtos() {
     mutationFn: async ({ id, ...payload }: Record<string, any>) => {
       const lote = payload._lote;
       delete payload._lote;
+      delete payload.preco_custo;
+      delete payload.frete_custo;
+      delete payload.lotes;
+
+      // Filtra estritamente apenas colunas que existem na tabela produtos do Supabase
+      const COLUNAS_VALIDAS = new Set([
+        'codigo', 'codigo_fabrica', 'codigo_interno', 'nome', 'marca',
+        'aplicacao', 'ncm', 'preco_venda', 'markup_percentual', 'estoque_minimo',
+        'estoque_total', 'categoria', 'tipo_veiculo', 'icms_percentual', 'ipi_percentual',
+        'pis_percentual', 'cofins_percentual', 'localizacao', 'imagem_url', 'imagens'
+      ]);
+
+      const cleanPayload: Record<string, any> = {};
+      for (const [k, v] of Object.entries(payload)) {
+        if (COLUNAS_VALIDAS.has(k)) {
+          cleanPayload[k] = v;
+        }
+      }
+
       if (id) {
-        const { error } = await (supabase as any).from('produtos').update(payload).eq('id', id);
+        const { error } = await (supabase as any).from('produtos').update(cleanPayload).eq('id', id);
         if (error) throw error;
       } else {
         const { data: inserted, error } = await (supabase as any)
           .from('produtos')
-          .insert(payload)
+          .insert(cleanPayload)
           .select('id')
           .single();
         if (error) throw error;
@@ -402,7 +423,7 @@ export default function Produtos() {
           </button>
           {isAdmin && (
             <button
-              onClick={() => setModal('new')}
+              onClick={() => openProdutoModal()}
               className="flex items-center gap-1.5 rounded-xl px-3.5 py-2 text-xs font-semibold text-white shadow-sm transition-all hover:opacity-90 active:scale-95"
               style={{ background: 'hsl(var(--primary))' }}
             >
@@ -564,7 +585,7 @@ export default function Produtos() {
                             <td className="py-2 pr-3 text-center" onClick={e => e.stopPropagation()}>
                               <div className="flex items-center justify-center gap-1">
                                 <button
-                                  onClick={() => setModal(p)}
+                                  onClick={() => openProdutoModal(p as any)}
                                   title="Editar Produto"
                                   className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground"
                                 >
@@ -871,21 +892,6 @@ export default function Produtos() {
             )}
           </div>
         </div>
-      )}
-
-      {/* Modal de Cadastro / Edição de Produto */}
-      {modal && (
-        <ProdutoModal
-          produto={modal === 'new' ? undefined : modal}
-          onClose={() => setModal(null)}
-          onSave={(data) => {
-            const payload = modal !== 'new' ? { id: modal.id, ...data } : data;
-            saveMutation.mutate(payload);
-          }}
-          saving={saveMutation.isPending}
-          markupPadrao={markupPadrao ?? '30'}
-          customCategorias={filterCategorias}
-        />
       )}
     </div>
   );

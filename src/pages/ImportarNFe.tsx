@@ -135,6 +135,7 @@ export default function ImportarNFe({ defaultTab = 'entrada' }: { defaultTab?: '
   const [listaDFe, setListaDFe] = useState<NotaRecebidaDFe[]>([]);
   const [carregandoDFe, setCarregandoDFe] = useState(false);
   const [itemParaCadastrar, setItemParaCadastrar] = useState<{ item: NFeItem; index: number } | null>(null);
+  const [isModalMinimizado, setIsModalMinimizado] = useState(false);
   const [savingModal, setSavingModal] = useState(false);
 
   // Estados do Histórico de Notas e Grade de Custos
@@ -336,11 +337,20 @@ export default function ImportarNFe({ defaultTab = 'entrada' }: { defaultTab?: '
       const item = itemParaCadastrar.item;
       const index = itemParaCadastrar.index;
       delete data._lote;
+      delete data.preco_custo;
+      delete data.frete_custo;
 
       const codItem = (data.codigo || data.codigo_fabrica || item.cProd || `PRD-${Date.now().toString().slice(-6)}`).trim();
 
-      // Define o estoque total inicial com a quantidade exata da nota fiscal
-      const payload = {
+      // Colunas permitidas na tabela produtos (remove frete_custo/preco_custo que pertencem a lotes)
+      const COLUNAS_PRODUTOS = [
+        'codigo', 'codigo_fabrica', 'codigo_interno', 'nome', 'marca', 'aplicacao',
+        'ncm', 'preco_venda', 'markup_percentual', 'estoque_minimo', 'estoque_total',
+        'categoria', 'tipo_veiculo', 'icms_percentual', 'ipi_percentual',
+        'pis_percentual', 'cofins_percentual', 'localizacao', 'imagem_url', 'imagens'
+      ];
+
+      const rawPayload: Record<string, any> = {
         codigo: codItem,
         codigo_fabrica: (data.codigo_fabrica || codItem).trim(),
         codigo_interno: (data.codigo_interno || '').trim(),
@@ -354,6 +364,13 @@ export default function ImportarNFe({ defaultTab = 'entrada' }: { defaultTab?: '
         markup_percentual: Number(data.markup_percentual || 50),
         localizacao: data.localizacao || 'Corredor A-Prateleira 01-G-01',
       };
+
+      const payload: Record<string, any> = {};
+      for (const col of COLUNAS_PRODUTOS) {
+        if (rawPayload[col] !== undefined) {
+          payload[col] = rawPayload[col];
+        }
+      }
 
       const { data: inserted, error: prodErr } = await (supabase as any)
         .from('produtos')
@@ -1162,6 +1179,9 @@ export default function ImportarNFe({ defaultTab = 'entrada' }: { defaultTab?: '
       {/* Modal de Cadastro de Produto com Compatibilidade Veicular */}
       {itemParaCadastrar && (
         <ProdutoModal
+          isMinimized={isModalMinimizado}
+          onMinimize={() => setIsModalMinimizado(true)}
+          onRestore={() => setIsModalMinimizado(false)}
           produto={{
             codigo: itemParaCadastrar.item.cProd,
             codigo_fabrica: itemParaCadastrar.item.cProd,

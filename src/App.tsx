@@ -19,6 +19,7 @@ import Login from "./pages/Login";
 import ResetPassword from "./pages/ResetPassword";
 import NotFound from "./pages/NotFound";
 import { AuthProvider, useAuth } from "./hooks/useAuth";
+import { CadastroModalProvider } from "./contexts/CadastroModalContext";
 import { Loader2 } from "lucide-react";
 
 const queryClient = new QueryClient();
@@ -74,7 +75,9 @@ const App = () => (
       <Sonner />
       <BrowserRouter>
         <AuthProvider>
-          <AppRoutes />
+          <CadastroModalProvider>
+            <AppRoutes />
+          </CadastroModalProvider>
         </AuthProvider>
       </BrowserRouter>
     </TooltipProvider>

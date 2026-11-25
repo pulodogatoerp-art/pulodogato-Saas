@@ -1,15 +1,17 @@
-import React, { createContext, useContext } from 'react';
+import React, { createContext, useContext, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard, Package, Users, FileText, ShoppingCart,
   DollarSign, ChevronLeft, ChevronRight, LogOut, Settings,
-  Wrench, Menu, FileUp, ShieldCheck, Plug, Landmark, History
+  Wrench, Menu, FileUp, ShieldCheck, Plug, Landmark, History,
+  Plus, UserPlus, PackagePlus
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { UserRole } from '@/types';
 import { useAuth } from '@/hooks/useAuth';
 import { supabase } from '@/integrations/supabase/client';
-import { useState } from 'react';
+import { useCadastroModal } from '@/contexts/CadastroModalContext';
+import GlobalCadastros from './GlobalCadastros';
 
 interface AppContextType {
   userRole: UserRole;
@@ -44,6 +46,17 @@ export default function Layout({ children }: LayoutProps) {
   const location = useLocation();
   const { role, nome, setUserRole } = useAuth();
   const userRole: UserRole = role ?? 'admin';
+
+  const {
+    openProdutoModal,
+    openClienteModal,
+    isProdutoOpen,
+    isClienteOpen,
+    restoreProdutoModal,
+    restoreClienteModal,
+    isProdutoMinimized,
+    isClienteMinimized,
+  } = useCadastroModal();
 
   const initials = nome
     ? nome.split(' ').map((n: string) => n[0]).slice(0, 2).join('').toUpperCase()
@@ -193,6 +206,45 @@ export default function Layout({ children }: LayoutProps) {
             >
               <Menu size={20} />
             </button>
+            {/* Atalhos Rápidos para Cadastros Persistentes */}
+            <div className="hidden md:flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => (isProdutoMinimized ? restoreProdutoModal() : openProdutoModal())}
+                className={cn(
+                  "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all",
+                  isProdutoOpen
+                    ? "bg-primary/10 border-primary text-primary"
+                    : "bg-muted/30 hover:bg-muted text-foreground border-border"
+                )}
+                title="Cadastrar nova peça (permanece aberta entre telas)"
+              >
+                <PackagePlus size={15} />
+                <span>+ Peça</span>
+                {isProdutoMinimized && (
+                  <span className="w-2 h-2 rounded-full bg-primary animate-pulse" />
+                )}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => (isClienteMinimized ? restoreClienteModal() : openClienteModal())}
+                className={cn(
+                  "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all",
+                  isClienteOpen
+                    ? "bg-primary/10 border-primary text-primary"
+                    : "bg-muted/30 hover:bg-muted text-foreground border-border"
+                )}
+                title="Cadastrar novo cliente (permanece aberto entre telas)"
+              >
+                <UserPlus size={15} />
+                <span>+ Cliente</span>
+                {isClienteMinimized && (
+                  <span className="w-2 h-2 rounded-full bg-primary animate-pulse" />
+                )}
+              </button>
+            </div>
+
             <div className="flex-1" />
             <div className="flex items-center gap-3">
               <div className="text-right hidden sm:block">
@@ -223,6 +275,9 @@ export default function Layout({ children }: LayoutProps) {
             {children}
           </main>
         </div>
+
+        {/* Modais Globais Persistentes */}
+        <GlobalCadastros />
       </div>
     </AppContext.Provider>
   );

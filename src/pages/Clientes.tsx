@@ -4,6 +4,7 @@ import { exportToCsv, exportToExcel } from '@/lib/export';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/hooks/useAuth';
+import { useCadastroModal } from '@/contexts/CadastroModalContext';
 import { cn } from '@/lib/utils';
 
 interface Cliente {
@@ -18,127 +19,14 @@ interface Cliente {
   created_at: string;
 }
 
-interface ClienteModalProps {
-  cliente?: Cliente;
-  onClose: () => void;
-  onSaved: () => void;
-}
-
-function ClienteModal({ cliente, onClose, onSaved }: ClienteModalProps) {
-  const { toast } = useToast();
-  const [saving, setSaving] = useState(false);
-  const [form, setForm] = useState({
-    nome: cliente?.nome ?? '',
-    cpf_cnpj: cliente?.cpf_cnpj ?? '',
-    telefone: cliente?.telefone ?? '',
-    whatsapp: cliente?.whatsapp ?? '',
-    email: cliente?.email ?? '',
-    endereco: cliente?.endereco ?? '',
-    observacoes: cliente?.observacoes ?? '',
-  });
-
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
-    setForm(f => ({ ...f, [e.target.name]: e.target.value }));
-  };
-
-  const handleSubmit = async () => {
-    if (!form.nome.trim()) {
-      toast({ title: 'Nome é obrigatório', variant: 'destructive' });
-      return;
-    }
-    setSaving(true);
-    try {
-      if (cliente) {
-        const { error } = await (supabase as any).from('clientes').update(form).eq('id', cliente.id);
-        if (error) throw error;
-        toast({ title: 'Cliente atualizado!' });
-      } else {
-        const { error } = await (supabase as any).from('clientes').insert(form);
-        if (error) throw error;
-        toast({ title: 'Cliente cadastrado!' });
-      }
-      onSaved();
-      onClose();
-    } catch (err: any) {
-      toast({ title: 'Erro', description: err.message, variant: 'destructive' });
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const fields = [
-    { label: 'Nome completo', name: 'nome', col: 2, required: true },
-    { label: 'CPF / CNPJ', name: 'cpf_cnpj', col: 1 },
-    { label: 'Telefone', name: 'telefone', col: 1 },
-    { label: 'WhatsApp', name: 'whatsapp', col: 1 },
-    { label: 'E-mail', name: 'email', col: 1, type: 'email' },
-    { label: 'Endereço', name: 'endereco', col: 2 },
-    { label: 'Observações', name: 'observacoes', col: 2, textarea: true },
-  ];
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
-      <div className="relative bg-background rounded-2xl shadow-lg w-full max-w-lg animate-fade-in">
-        <div className="flex items-center justify-between px-6 py-4 border-b">
-          <h2 className="font-bold text-lg">{cliente ? 'Editar Cliente' : 'Novo Cliente'}</h2>
-          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-muted transition-colors">
-            <X size={18} />
-          </button>
-        </div>
-        <div className="px-6 py-5 grid grid-cols-2 gap-4">
-          {fields.map(({ label, name, col, required, type, textarea }) => (
-            <div key={name} className={col === 2 ? 'col-span-2' : ''}>
-              <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1.5">
-                {label} {required && <span className="text-destructive">*</span>}
-              </label>
-              {textarea ? (
-                <textarea
-                  name={name}
-                  value={(form as any)[name]}
-                  onChange={handleChange}
-                  rows={2}
-                  className="w-full rounded-lg border px-3 py-2.5 text-sm bg-background focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary transition-all resize-none"
-                />
-              ) : (
-                <input
-                  name={name}
-                  type={type ?? 'text'}
-                  value={(form as any)[name]}
-                  onChange={handleChange}
-                  className="w-full rounded-lg border px-3 py-2.5 text-sm bg-background focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary transition-all"
-                />
-              )}
-            </div>
-          ))}
-        </div>
-        <div className="flex gap-3 px-6 py-4 border-t">
-          <button onClick={onClose} className="flex-1 rounded-lg border px-4 py-2.5 text-sm font-medium hover:bg-muted transition-colors">
-            Cancelar
-          </button>
-          <button
-            onClick={handleSubmit}
-            disabled={saving}
-            className="flex-1 rounded-lg px-4 py-2.5 text-sm font-semibold text-white transition-all hover:opacity-90 active:scale-95 disabled:opacity-60 flex items-center justify-center gap-2"
-            style={{ background: 'hsl(var(--primary))' }}
-          >
-            {saving && <Loader2 size={14} className="animate-spin" />}
-            {cliente ? 'Salvar Alterações' : 'Cadastrar Cliente'}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 export default function Clientes() {
   const { role } = useAuth();
   const { toast } = useToast();
+  const { openClienteModal } = useCadastroModal();
   const isAdmin = role === 'admin';
   const [search, setSearch] = useState('');
   const [clientes, setClientes] = useState<Cliente[]>([]);
   const [loading, setLoading] = useState(true);
-  const [modal, setModal] = useState<'new' | Cliente | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const fetchClientes = async () => {
@@ -226,7 +114,7 @@ export default function Clientes() {
           </button>
           {isAdmin && (
             <button
-              onClick={() => setModal('new')}
+              onClick={() => openClienteModal(undefined, fetchClientes)}
               className="flex items-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold text-white shadow-orange transition-all hover:opacity-90 active:scale-95"
               style={{ background: 'hsl(var(--primary))' }}
             >
@@ -276,7 +164,7 @@ export default function Clientes() {
                 {isAdmin && (
                   <div className="flex gap-1">
                     <button
-                      onClick={() => setModal(c)}
+                      onClick={() => openClienteModal(c, fetchClientes)}
                       className="p-1.5 rounded-md hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
                     >
                       <Edit2 size={13} />
@@ -324,14 +212,6 @@ export default function Clientes() {
             </div>
           ))}
         </div>
-      )}
-
-      {modal && (
-        <ClienteModal
-          cliente={modal === 'new' ? undefined : modal}
-          onClose={() => setModal(null)}
-          onSaved={fetchClientes}
-        />
       )}
     </div>
   );
