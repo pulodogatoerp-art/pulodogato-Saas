@@ -187,6 +187,11 @@ export default function DanfeNfceModal({ dados, resultado, onClose }: DanfeNfceM
               <p className="font-bold text-[12px] tracking-wide">DANFE NFC-e</p>
               <p className="text-[9px] font-semibold">Documento Auxiliar da Nota Fiscal de Consumidor Eletrônica</p>
               <p className="text-[8px] text-gray-600">Não permite aproveitamento de crédito de ICMS</p>
+              {dados.ambiente !== 'producao' && (
+                <p className="text-[9px] font-bold text-amber-700 bg-amber-100 border border-amber-300 rounded px-1.5 py-0.5 mt-1">
+                  EMITIDA EM AMBIENTE DE HOMOLOGAÇÃO - SEM VALOR FISCAL
+                </p>
+              )}
             </div>
 
             {/* Tabela de Itens */}

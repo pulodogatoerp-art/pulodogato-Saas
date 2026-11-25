@@ -214,8 +214,12 @@ export default function Vendas() {
         freteValor: freteVal,
         totalProdutos: totalItens,
         totalVenda: Number(vendaParaEmitir.total),
-        cscId: config?.['nfce_id_csc'] || '000001',
-        cscToken: config?.['nfce_csc'] || '',
+        cscId: ambiente === 'homologacao'
+          ? (config?.['nfce_id_csc_homologacao'] || config?.['nfce_id_csc'] || '000001')
+          : (config?.['nfce_id_csc'] || '000001'),
+        cscToken: ambiente === 'homologacao'
+          ? (config?.['nfce_csc_homologacao'] || config?.['nfce_csc'] || '')
+          : (config?.['nfce_csc'] || ''),
         emitente: {
           cnpj: cnpjEmpresa,
           razaoSocial: config?.['empresa_nome'] || 'AutoPeças',

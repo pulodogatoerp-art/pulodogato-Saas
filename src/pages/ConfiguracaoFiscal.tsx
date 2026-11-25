@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import {
   FileText, Building2, Receipt, ShieldCheck, Key, Percent,
   Save, Loader2, CheckCircle2, AlertCircle, MapPin, Landmark,
-  DownloadCloud, Globe, Eye, EyeOff
+  DownloadCloud, Globe, Eye, EyeOff, Play
 } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -10,6 +10,8 @@ import { useToast } from '@/hooks/use-toast';
 import { useAppContext } from '@/components/Layout';
 import { cn } from '@/lib/utils';
 import CertificadoA1 from '@/components/CertificadoA1';
+import DanfeNfceModal from '@/components/DanfeNfceModal';
+import { emitirDocumentoFiscal, NFeVendaData, NFeResultado } from '@/services/nfeService';
 
 const FISCAL_KEYS = [
   'empresa_nome',
@@ -35,6 +37,8 @@ const FISCAL_KEYS = [
   'nfce_proximo_numero',
   'nfce_id_csc',
   'nfce_csc',
+  'nfce_id_csc_homologacao',
+  'nfce_csc_homologacao',
   // NF-e (Modelo 55)
   'nfe_serie',
   'nfe_proximo_numero',
@@ -62,6 +66,8 @@ export default function ConfiguracaoFiscal() {
   const [form, setForm] = useState<Record<string, string>>({});
   const [dirty, setDirty] = useState(false);
   const [showToken, setShowToken] = useState(false);
+  const [testandoNfce, setTestandoNfce] = useState(false);
+  const [nfceTesteModal, setNfceTesteModal] = useState<{ dados: NFeVendaData; resultado: NFeResultado } | null>(null);
 
   const { data: config, isLoading } = useQuery({
     queryKey: ['configuracoes'],
@@ -130,6 +136,94 @@ export default function ConfiguracaoFiscal() {
 
   const ambienteAtual = form['nfe_ambiente'] || 'homologacao';
   const regimeAtual = form['nfe_regime_tributario'] || '1';
+
+  const handleTestarNfceHomologacao = async () => {
+    const cnpjLimpo = (form['empresa_cnpj'] || '').replace(/\D/g, '');
+    if (cnpjLimpo.length !== 14) {
+      toast({
+        title: 'CNPJ não configurado',
+        description: 'Preencha o CNPJ da empresa na aba "Emitente & Endereço" antes de testar o Cupom Fiscal.',
+        variant: 'destructive',
+      });
+      setTabAtiva('geral');
+      return;
+    }
+
+    setTestandoNfce(true);
+    try {
+      const numeroAtual = parseInt(form['nfce_proximo_numero'] || '1', 10) || 1;
+      const serieAtual = form['nfce_serie'] || '1';
+
+      const docData: NFeVendaData = {
+        vendaId: `teste-homol-${Date.now()}`,
+        vendaNumero: `TESTE-NFCE-${numeroAtual}`,
+        dataEmissao: new Date(),
+        naturezaOperacao: 'VENDA AO CONSUMIDOR (TESTE HOMOLOGACAO)',
+        serie: serieAtual,
+        numero: numeroAtual,
+        modelo: '65',
+        tipo: 'nfce',
+        ambiente: 'homologacao',
+        formaPagamento: 'Dinheiro',
+        freteModalidade: 9,
+        freteValor: 0,
+        totalProdutos: 45.0,
+        totalVenda: 45.0,
+        informacoesAdicionais: 'CUPOM FISCAL DE TESTE EMITIDO EM AMBIENTE DE HOMOLOGACAO (SEM VALOR FISCAL).',
+        cscId: form['nfce_id_csc_homologacao'] || form['nfce_id_csc'] || '000001',
+        cscToken: form['nfce_csc_homologacao'] || form['nfce_csc'] || 'ffa0a4ef9c0175f8e08893a1b45c5ef39661',
+        emitente: {
+          cnpj: form['empresa_cnpj'],
+          razaoSocial: form['empresa_nome'] || 'AUTO PECAS TESTE LTDA',
+          nomeFantasia: form['empresa_nome_fantasia'] || form['empresa_nome'] || 'AUTO PECAS TESTE',
+          ie: form['empresa_ie'] || 'ISENTO',
+          endereco: `${form['empresa_endereco'] || 'Rua Principal'}, ${form['empresa_numero'] || 'S/N'}`,
+          cidade: form['empresa_cidade'] || 'Campo Grande',
+          uf: form['empresa_uf'] || 'MS',
+          cep: form['empresa_cep'] || '79000000',
+          telefone: form['empresa_telefone'] || '',
+          email: form['empresa_email'] || '',
+          regimeTributario: form['nfe_regime_tributario'] || '1',
+        },
+        destinatario: {
+          nome: 'NF-E EMITIDA EM AMBIENTE DE HOMOLOGACAO - SEM VALOR FISCAL',
+        },
+        itens: [
+          {
+            id: 'teste-item-1',
+            codigo: 'TESTE-001',
+            descricao: 'FILTRO DE OLEO MOTOR (TESTE HOMOLOGACAO)',
+            ncm: '84212300',
+            cfop: '5102',
+            unidade: 'UN',
+            quantidade: 1,
+            valorUnitario: 45.0,
+            valorTotal: 45.0,
+            icmsAliquota: parseFloat(form['icms_percentual'] || '17') || 17,
+            pisAliquota: parseFloat(form['pis_percentual'] || '1.65') || 1.65,
+            cofinsAliquota: parseFloat(form['cofins_percentual'] || '7.6') || 7.6,
+          },
+        ],
+      };
+
+      const resultado = await emitirDocumentoFiscal(docData, form['nfe_focus_token']);
+      setForm(prev => ({ ...prev, nfce_proximo_numero: String(numeroAtual + 1) }));
+      queryClient.invalidateQueries({ queryKey: ['configuracoes'] });
+      setNfceTesteModal({ dados: docData, resultado });
+      toast({
+        title: 'Cupom Fiscal (NFC-e) testado em Homologação!',
+        description: `Nº ${resultado.numero} · Chave: ${resultado.chaveAcesso.slice(-12)}`,
+      });
+    } catch (err: any) {
+      toast({
+        title: 'Falha no teste de Cupom Fiscal',
+        description: err.message,
+        variant: 'destructive',
+      });
+    } finally {
+      setTestandoNfce(false);
+    }
+  };
 
   return (
     <div className="space-y-6 max-w-5xl mx-auto pb-12">
@@ -362,8 +456,36 @@ export default function ConfiguracaoFiscal() {
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                 {renderField("Série da NFC-e", "nfce_serie", "1", "text", "Geralmente série 1")}
                 {renderField("Próximo Número NFC-e", "nfce_proximo_numero", "1", "number", "Sequencial da próxima emissão")}
-                {renderField("ID do Token CSC", "nfce_id_csc", "000001", "text", "Ex: 000001 (fornecido pela SEFAZ)")}
-                {renderField("Código Token CSC (SEFAZ)", "nfce_csc", "Código alfanumérico do CSC", "password", "Segurança do QR Code")}
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-4 space-y-3">
+                  <p className="text-xs font-bold uppercase tracking-wider text-amber-700 dark:text-amber-400">
+                    CSC de Homologação (Testes SEFAZ)
+                  </p>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div>
+                      {renderField("ID CSC (Homol.)", "nfce_id_csc_homologacao", "000001", "text", "Ex: 000001")}
+                    </div>
+                    <div className="sm:col-span-2">
+                      {renderField("Código CSC (Homologação)", "nfce_csc_homologacao", "ffa0a4ef9c0175f8e08893a1b45c5ef39661", "text", "Token de homologação SEFAZ")}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-4 space-y-3">
+                  <p className="text-xs font-bold uppercase tracking-wider text-emerald-700 dark:text-emerald-400">
+                    CSC de Produção (Oficial)
+                  </p>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div>
+                      {renderField("ID CSC (Prod.)", "nfce_id_csc", "000001", "text", "Ex: 000001")}
+                    </div>
+                    <div className="sm:col-span-2">
+                      {renderField("Código CSC (Produção)", "nfce_csc", "Código alfanumérico do CSC", "password", "Segurança do QR Code")}
+                    </div>
+                  </div>
+                </div>
               </div>
 
               <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-4 text-xs space-y-1.5 text-muted-foreground">
@@ -373,6 +495,21 @@ export default function ConfiguracaoFiscal() {
                 <p>
                   O <strong>CSC (Código de Segurança do Contribuinte)</strong> e o <strong>ID do Token</strong> são gerados no portal da SEFAZ do seu Estado. Eles são obrigatórios para validar o QR Code impresso no cupom fiscal para que o consumidor possa consultar a nota no smartphone.
                 </p>
+              </div>
+
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2 border-t">
+                <div className="text-xs text-muted-foreground">
+                  <span className="font-semibold text-foreground">Teste em Homologação (SEFAZ):</span> Emite um Cupom Fiscal de teste (Modelo 65) sem validade fiscal para conferir chave, QR Code, XML e impressão 80mm.
+                </div>
+                <button
+                  type="button"
+                  onClick={handleTestarNfceHomologacao}
+                  disabled={testandoNfce}
+                  className="shrink-0 inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold shadow-sm transition-all disabled:opacity-50"
+                >
+                  {testandoNfce ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />}
+                  {testandoNfce ? 'Emitindo Teste...' : 'Testar Cupom Fiscal (Homologação)'}
+                </button>
               </div>
             </div>
           )}
@@ -494,6 +631,14 @@ export default function ConfiguracaoFiscal() {
           )}
 
         </div>
+      )}
+
+      {nfceTesteModal && (
+        <DanfeNfceModal
+          dados={nfceTesteModal.dados}
+          resultado={nfceTesteModal.resultado}
+          onClose={() => setNfceTesteModal(null)}
+        />
       )}
     </div>
   );

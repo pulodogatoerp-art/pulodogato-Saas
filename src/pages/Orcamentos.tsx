@@ -933,8 +933,12 @@ export default function Orcamentos() {
             freteValor: Number(selectedOrc.frete_valor) || 0,
             totalProdutos: itensDetail.reduce((acc, it) => acc + Number(it.subtotal), 0),
             totalVenda: Number(selectedOrc.total),
-            cscId: configFiscal?.['nfce_id_csc'] || '000001',
-            cscToken: configFiscal?.['nfce_csc'] || '',
+            cscId: ambiente === 'homologacao'
+              ? (configFiscal?.['nfce_id_csc_homologacao'] || configFiscal?.['nfce_id_csc'] || '000001')
+              : (configFiscal?.['nfce_id_csc'] || '000001'),
+            cscToken: ambiente === 'homologacao'
+              ? (configFiscal?.['nfce_csc_homologacao'] || configFiscal?.['nfce_csc'] || '')
+              : (configFiscal?.['nfce_csc'] || ''),
             emitente: {
               cnpj: configFiscal?.['empresa_cnpj'] || '',
               razaoSocial: configFiscal?.['empresa_nome'] || (empresa as any)?.empresa_nome || 'Autopeças MGN',

@@ -133,18 +133,74 @@ export function formatarChave(chave: string): string {
   return limpo.replace(/(\d{4})/g, '$1 ').trim();
 }
 
-// Gera URL oficial de consulta via QR Code para NFC-e (SEFAZ MS / Nacional)
+// SHA-1 síncrono para gerar cHashQRCode oficial do QR Code NFC-e v2.0 (SEFAZ)
+function sha1HexUpper(msg: string): string {
+  const utf8 = unescape(encodeURIComponent(msg));
+  const words: number[] = [];
+  for (let i = 0; i < utf8.length; i++) {
+    words[i >> 2] |= utf8.charCodeAt(i) << (24 - (i % 4) * 8);
+  }
+  words[utf8.length >> 2] |= 0x80 << (24 - (utf8.length % 4) * 8);
+  words[((utf8.length + 8) >> 6 << 4) + 15] = utf8.length * 8;
+
+  let h0 = 0x67452301;
+  let h1 = 0xefcdab89;
+  let h2 = 0x98badcfe;
+  let h3 = 0x10325476;
+  let h4 = 0xc3d2e1f0;
+  const w = new Array<number>(80);
+
+  const rotl = (n: number, s: number) => (n << s) | (n >>> (32 - s));
+
+  for (let i = 0; i < words.length; i += 16) {
+    let a = h0, b = h1, c = h2, d = h3, e = h4;
+    for (let j = 0; j < 80; j++) {
+      if (j < 16) {
+        w[j] = words[i + j] | 0;
+      } else {
+        w[j] = rotl(w[j - 3] ^ w[j - 8] ^ w[j - 14] ^ w[j - 16], 1);
+      }
+      const f =
+        j < 20 ? (b & c) | (~b & d) :
+        j < 40 ? b ^ c ^ d :
+        j < 60 ? (b & c) | (b & d) | (c & d) :
+        b ^ c ^ d;
+      const k =
+        j < 20 ? 0x5a827999 :
+        j < 40 ? 0x6ed9eba1 :
+        j < 60 ? 0x8f1bbcdc :
+        0xca62c1d6;
+      const temp = (rotl(a, 5) + f + e + k + w[j]) | 0;
+      e = d;
+      d = c;
+      c = rotl(b, 30);
+      b = a;
+      a = temp;
+    }
+    h0 = (h0 + a) | 0;
+    h1 = (h1 + b) | 0;
+    h2 = (h2 + c) | 0;
+    h3 = (h3 + d) | 0;
+    h4 = (h4 + e) | 0;
+  }
+
+  return [h0, h1, h2, h3, h4]
+    .map(v => (v >>> 0).toString(16).padStart(8, '0'))
+    .join('')
+    .toUpperCase();
+}
+
+// Gera URL oficial de consulta via QR Code para NFC-e v2.0 (SEFAZ MS / Nacional)
 export function gerarQrCodeNfce(chaveAcesso: string, ambiente: 'homologacao' | 'producao', cscId?: string, cscToken?: string): string {
   const tpAmb = ambiente === 'producao' ? '1' : '2';
-  // Padrão SEFAZ para QR-Code versão 2.0 (Mato Grosso do Sul / SVRS)
-  const idCsc = (cscId || '000001').padStart(6, '0');
-  // Param p: chave|versao|ambiente|idCSC
+  // Padrão SEFAZ QR Code v2.0: idCSC sem zeros à esquerda (ex: '1')
+  const idCsc = String(parseInt(cscId || '1', 10) || 1);
   const baseParam = `${chaveAcesso}|2|${tpAmb}|${idCsc}`;
-  
-  if (ambiente === 'producao') {
-    return `https://www.dfe.ms.gov.br/nfce/qrcode?p=${baseParam}`;
-  }
-  return `https://www.dfe.ms.gov.br/nfce/qrcode?p=${baseParam}`;
+  const cscLimpo = (cscToken || '').trim();
+  const cHashQRCode = cscLimpo ? sha1HexUpper(`${baseParam}${cscLimpo}`) : '';
+  const p = cHashQRCode ? `${baseParam}|${cHashQRCode}` : baseParam;
+
+  return `https://www.dfe.ms.gov.br/nfce/qrcode?p=${p}`;
 }
 
 // Gera o XML oficial compatível com SEFAZ Layout 4.00 (NF-e mod 55 ou NFC-e mod 65)
@@ -263,7 +319,7 @@ export function gerarXmlNFe(dados: NFeVendaData, chaveAcesso: string, protocolo:
       ${temDestinatario ? `
       <dest>
         ${docDest ? `<${isCnpj ? 'CNPJ' : 'CPF'}>${docDest}</${isCnpj ? 'CNPJ' : 'CPF'}>` : ''}
-        <xNome>${escapeXml(dados.destinatario.nome || 'CONSUMIDOR FINAL')}</xNome>
+        <xNome>${dados.ambiente === 'homologacao' ? 'NF-E EMITIDA EM AMBIENTE DE HOMOLOGACAO - SEM VALOR FISCAL' : escapeXml(dados.destinatario.nome || 'CONSUMIDOR FINAL')}</xNome>
         ${!isNfce ? `
         <enderDest>
           <xLgr>${escapeXml(dados.destinatario.endereco || 'Endereco do Cliente')}</xLgr>
