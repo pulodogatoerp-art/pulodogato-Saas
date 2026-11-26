@@ -41,12 +41,31 @@ function extractAllTags(xml: string, tag: string): string[] {
   return out;
 }
 
-function createMtlsClient(certPem: string, keyPem: string) {
-  // Deno 2 uses { cert, key }, Deno 1 uses { certChain, privateKey }
+async function postSoapHttp11(urlStr: string, soapBody: string, certPem: string, keyPem: string): Promise<string> {
+  const client = (Deno as any).createHttpClient({
+    certChain: certPem,
+    privateKey: keyPem,
+    cert: certPem,
+    key: keyPem,
+    http2: false,
+    http1: true,
+  });
   try {
-    return (Deno as any).createHttpClient({ cert: certPem, key: keyPem });
-  } catch {
-    return (Deno as any).createHttpClient({ certChain: certPem, privateKey: keyPem });
+    const res = await fetch(urlStr, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/soap+xml; charset=utf-8',
+      },
+      body: soapBody,
+      client,
+    } as any);
+    return await res.text();
+  } finally {
+    try {
+      client?.close?.();
+    } catch {
+      // ignore
+    }
   }
 }
 
@@ -142,8 +161,9 @@ async function loadA1Credentials(admin: any, configMap: Record<string, string>) 
 
   if (!mainCertBag?.cert) throw new Error('Certificado X.509 não encontrado no arquivo .pfx.');
 
-  const certChainPem = certBags
-    .filter((b: any) => b.cert)
+  // Garante que o certificado folha (correspondente à chave privada) venha PRIMEIRO na cadeia
+  const otherCerts = certBags.filter((b: any) => b.cert && b !== mainCertBag);
+  const certChainPem = [mainCertBag, ...otherCerts]
     .map((b: any) => forge.pki.certificateToPem(b.cert))
     .join('\n');
   const keyPem = forge.pki.privateKeyToPem(privKey);
@@ -325,130 +345,104 @@ Deno.serve(async (req) => {
     }
 
     const { certPem, keyPem, privKey, certDerB64 } = await loadA1Credentials(admin, configMap);
-    const client = createMtlsClient(certPem, keyPem);
 
-    try {
-      const distEndpoint =
-        tpAmb === '1'
-          ? 'https://www1.nfe.fazenda.gov.br/NFeDistribuicaoDFe/NFeDistribuicaoDFe.asmx'
-          : 'https://hom1.nfe.fazenda.gov.br/NFeDistribuicaoDFe/NFeDistribuicaoDFe.asmx';
+    const distEndpoint =
+      tpAmb === '1'
+        ? 'https://www1.nfe.fazenda.gov.br/NFeDistribuicaoDFe/NFeDistribuicaoDFe.asmx'
+        : 'https://hom1.nfe.fazenda.gov.br/NFeDistribuicaoDFe/NFeDistribuicaoDFe.asmx';
 
-      if (action === 'listar') {
-        const soap = buildDistDFeSoap({ tpAmb, cUFAutor, cnpj: effectiveCnpj, ultNSU: '0' });
-        const res = await fetch(distEndpoint, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/soap+xml; charset=utf-8' },
-          body: soap,
-          client,
-        } as any);
-        const xmlResp = await res.text();
-        const docs = extractAllTags(xmlResp, 'docZip');
-        const notas: any[] = [];
-        for (const b64 of docs) {
-          const docXml = await gunzipBase64(b64);
-          const ch = extractTag(docXml, 'chNFe');
-          if (!ch) continue;
-          notas.push({
-            chaveAcesso: ch,
-            numero: String(parseInt(ch.slice(25, 34), 10) || '1'),
-            serie: ch.slice(22, 25),
-            emitenteNome: extractTag(docXml, 'xNome') || 'Fornecedor',
-            emitenteCnpj: extractTag(docXml, 'CNPJ') || ch.slice(6, 20),
-            destinatarioCnpj: effectiveCnpj,
-            dataEmissao: (extractTag(docXml, 'dhEmi') || new Date().toISOString()).split('T')[0],
-            valorTotal: parseFloat(extractTag(docXml, 'vNF') || '0'),
-            status: 'autorizada',
-            temXmlLocal: docXml.includes('<infNFe'),
-          });
-        }
-        return jsonReply({ notas });
-      }
-
-      const chaveLimpa = String(chaveAcesso || '').replace(/\D/g, '');
-      if (chaveLimpa.length !== 44) {
-        return jsonReply({ error: 'Chave de acesso inválida (deve conter 44 dígitos).' }, 400);
-      }
-
-      const soap1 = buildDistDFeSoap({ tpAmb, cUFAutor, cnpj: effectiveCnpj, chaveAcesso: chaveLimpa });
-      const res1 = await fetch(distEndpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/soap+xml; charset=utf-8' },
-        body: soap1,
-        client,
-      } as any);
-
-      const xmlResp1 = await res1.text();
-      let cStat = extractTag(xmlResp1, 'cStat');
-      let xMotivo = extractTag(xmlResp1, 'xMotivo');
-      let docs = extractAllTags(xmlResp1, 'docZip');
-
-      // Verifica se já veio o XML completo (<infNFe)
+    if (action === 'listar') {
+      const soap = buildDistDFeSoap({ tpAmb, cUFAutor, cnpj: effectiveCnpj, ultNSU: '0' });
+      const xmlResp = await postSoapHttp11(distEndpoint, soap, certPem, keyPem);
+      const docs = extractAllTags(xmlResp, 'docZip');
+      const notas: any[] = [];
       for (const b64 of docs) {
         const docXml = await gunzipBase64(b64);
-        if (docXml.includes('<infNFe')) {
-          return jsonReply({ xmlText: docXml, origem: 'sefaz_dfe' });
-        }
+        const ch = extractTag(docXml, 'chNFe');
+        if (!ch) continue;
+        notas.push({
+          chaveAcesso: ch,
+          numero: String(parseInt(ch.slice(25, 34), 10) || '1'),
+          serie: ch.slice(22, 25),
+          emitenteNome: extractTag(docXml, 'xNome') || 'Fornecedor',
+          emitenteCnpj: extractTag(docXml, 'CNPJ') || ch.slice(6, 20),
+          destinatarioCnpj: effectiveCnpj,
+          dataEmissao: (extractTag(docXml, 'dhEmi') || new Date().toISOString()).split('T')[0],
+          valorTotal: parseFloat(extractTag(docXml, 'vNF') || '0'),
+          status: 'autorizada',
+          temXmlLocal: docXml.includes('<infNFe'),
+        });
       }
+      return jsonReply({ notas });
+    }
 
-      // Se veio apenas resumo (<resNFe>) ou se precisa manifestar Ciência da Operação (210210)
-      const eventoEndpoint =
-        tpAmb === '1'
-          ? 'https://www.nfe.fazenda.gov.br/NFeRecepcaoEvento4/NFeRecepcaoEvento4.asmx'
-          : 'https://hom.nfe.fazenda.gov.br/NFeRecepcaoEvento4/NFeRecepcaoEvento4.asmx';
+    const chaveLimpa = String(chaveAcesso || '').replace(/\D/g, '');
+    if (chaveLimpa.length !== 44) {
+      return jsonReply({ error: 'Chave de acesso inválida (deve conter 44 dígitos).' }, 400);
+    }
 
-      const eventoSoap = signManifestacaoXml({
-        chaveAcesso: chaveLimpa,
-        cnpj: effectiveCnpj,
-        tpAmb,
-        privKey,
-        certDerB64,
-      });
+    const soap1 = buildDistDFeSoap({ tpAmb, cUFAutor, cnpj: effectiveCnpj, chaveAcesso: chaveLimpa });
+    const xmlResp1 = await postSoapHttp11(distEndpoint, soap1, certPem, keyPem);
+    let cStat = extractTag(xmlResp1, 'cStat');
+    let xMotivo = extractTag(xmlResp1, 'xMotivo');
+    let docs = extractAllTags(xmlResp1, 'docZip');
 
-      await fetch(eventoEndpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/soap+xml; charset=utf-8' },
-        body: eventoSoap,
-        client,
-      } as any).catch(() => null);
-
-      // Reconsulta a SEFAZ após ciência da operação
-      const soap2 = buildDistDFeSoap({ tpAmb, cUFAutor, cnpj: effectiveCnpj, chaveAcesso: chaveLimpa });
-      const res2 = await fetch(distEndpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/soap+xml; charset=utf-8' },
-        body: soap2,
-        client,
-      } as any);
-
-      const xmlResp2 = await res2.text();
-      cStat = extractTag(xmlResp2, 'cStat') || cStat;
-      xMotivo = extractTag(xmlResp2, 'xMotivo') || xMotivo;
-      docs = extractAllTags(xmlResp2, 'docZip');
-
-      for (const b64 of docs) {
-        const docXml = await gunzipBase64(b64);
-        if (docXml.includes('<infNFe')) {
-          return jsonReply({ xmlText: docXml, origem: 'sefaz_dfe' });
-        }
-      }
-
-      return jsonReply(
-        {
-          error: `SEFAZ retornou (${cStat || 'sem código'}): ${xMotivo || 'XML completo ainda não disponibilizado pela SEFAZ.'} Se o ambiente fiscal estiver em Homologação, altere para Produção na Configuração Fiscal para baixar notas reais emitidas contra o seu CNPJ.`,
-        },
-        404
-      );
-    } finally {
-      try {
-        client?.close?.();
-      } catch {
-        // ignore
+    // Verifica se já veio o XML completo (<infNFe)
+    for (const b64 of docs) {
+      const docXml = await gunzipBase64(b64);
+      if (docXml.includes('<infNFe')) {
+        return jsonReply({ xmlText: docXml, origem: 'sefaz_dfe' });
       }
     }
-  } catch (err: any) {
+
+    // Se veio apenas resumo (<resNFe>) ou se precisa manifestar Ciência da Operação (210210)
+    const eventoEndpoint =
+      tpAmb === '1'
+        ? 'https://www.nfe.fazenda.gov.br/NFeRecepcaoEvento4/NFeRecepcaoEvento4.asmx'
+        : 'https://hom.nfe.fazenda.gov.br/NFeRecepcaoEvento4/NFeRecepcaoEvento4.asmx';
+
+    const eventoSoap = signManifestacaoXml({
+      chaveAcesso: chaveLimpa,
+      cnpj: effectiveCnpj,
+      tpAmb,
+      privKey,
+      certDerB64,
+    });
+
+    await postSoapHttp11(eventoEndpoint, eventoSoap, certPem, keyPem).catch(() => null);
+
+    // Reconsulta a SEFAZ após ciência da operação
+    const soap2 = buildDistDFeSoap({ tpAmb, cUFAutor, cnpj: effectiveCnpj, chaveAcesso: chaveLimpa });
+    const xmlResp2 = await postSoapHttp11(distEndpoint, soap2, certPem, keyPem);
+    cStat = extractTag(xmlResp2, 'cStat') || cStat;
+    xMotivo = extractTag(xmlResp2, 'xMotivo') || xMotivo;
+    docs = extractAllTags(xmlResp2, 'docZip');
+
+    for (const b64 of docs) {
+      const docXml = await gunzipBase64(b64);
+      if (docXml.includes('<infNFe')) {
+        return jsonReply({ xmlText: docXml, origem: 'sefaz_dfe' });
+      }
+    }
+
     return jsonReply(
-      { error: err?.message || 'Erro ao consultar SEFAZ com Certificado A1.' },
-      500
+      {
+        error: `SEFAZ retornou (${cStat || 'sem código'}): ${xMotivo || 'XML completo ainda não disponibilizado pela SEFAZ.'}`,
+      },
+      404
     );
+  } catch (err: any) {
+    const rawMsg = String(err?.message || '');
+    const isSefazTlsOrHttp =
+      rawMsg.includes('HTTP/1.1') ||
+      rawMsg.includes('Connection reset') ||
+      rawMsg.includes('ECONNRESET') ||
+      rawMsg.includes('http2 error');
+
+    const friendlyMsg = isSefazTlsOrHttp
+      ? 'O servidor da SEFAZ Nacional recusou a conexão direta em nuvem (exige HTTP/1.1 mTLS com IP dedicado). Para baixar os itens e valores reais pela chave de 44 dígitos, configure o Token da API Fiscal (Focus NFe) em Configuração Fiscal → SEFAZ & Baixa contra CNPJ, ou utilize a aba "Upload de Arquivo XML" com o .xml do fornecedor.'
+      : rawMsg || 'Erro ao consultar SEFAZ com Certificado A1.';
+
+    return jsonReply({ error: friendlyMsg }, isSefazTlsOrHttp ? 502 : 500);
   }
 });
