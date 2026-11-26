@@ -131,6 +131,7 @@ export default function ImportarNFe({ defaultTab = 'entrada' }: { defaultTab?: '
   const [acoes, setAcoes] = useState<ItemAcao[]>([]);
   const [analisando, setAnalisando] = useState(false);
   const [baixandoSefaz, setBaixandoSefaz] = useState(false);
+  const [erroSefaz, setErroSefaz] = useState<string | null>(null);
   const [chaveInput, setChaveInput] = useState('');
   const [listaDFe, setListaDFe] = useState<NotaRecebidaDFe[]>([]);
   const [carregandoDFe, setCarregandoDFe] = useState(false);
@@ -221,6 +222,7 @@ export default function ImportarNFe({ defaultTab = 'entrada' }: { defaultTab?: '
     }
 
     setBaixandoSefaz(true);
+    setErroSefaz(null);
     setStatus('parsing');
 
     try {
@@ -241,7 +243,8 @@ export default function ImportarNFe({ defaultTab = 'entrada' }: { defaultTab?: '
         description: `Nota Nº ${data.numero} emitida por ${data.emitenteNome} carregada para conferência.`,
       });
     } catch (err: any) {
-      toast({ title: 'Erro ao baixar nota da SEFAZ', description: err.message, variant: 'destructive' });
+      setErroSefaz(err.message);
+      toast({ title: 'Não foi possível baixar o XML completo', description: err.message, variant: 'destructive' });
       setStatus('error');
     } finally {
       setBaixandoSefaz(false);
@@ -1012,6 +1015,34 @@ export default function ImportarNFe({ defaultTab = 'entrada' }: { defaultTab?: '
                 {baixandoSefaz ? <Loader2 size={16} className="animate-spin" /> : <DownloadCloud size={16} />}
                 {baixandoSefaz ? 'Consultando e Baixando XML da SEFAZ…' : 'Baixar Nota Fiscal Direto da SEFAZ'}
               </button>
+
+              {status === 'error' && erroSefaz && (
+                <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-4 text-xs space-y-3 animate-fade-in">
+                  <div className="flex items-start gap-2.5 text-amber-800 dark:text-amber-300">
+                    <AlertTriangle size={18} className="shrink-0 mt-0.5 text-amber-600" />
+                    <div className="space-y-1">
+                      <p className="font-bold text-sm">XML completo não disponível via chave neste momento</p>
+                      <p className="leading-relaxed">{erroSefaz}</p>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => { setMetodo('upload'); setErroSefaz(null); setStatus('idle'); }}
+                      className="px-3 py-1.5 rounded-lg bg-primary text-primary-foreground font-semibold hover:opacity-90 flex items-center gap-1.5"
+                    >
+                      <Upload size={13} /> Importar via Arquivo .XML
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => navigate('/configuracao-fiscal')}
+                      className="px-3 py-1.5 rounded-lg border bg-background hover:bg-muted font-semibold flex items-center gap-1.5"
+                    >
+                      <Landmark size={13} /> Configurar Token Focus NFe
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 

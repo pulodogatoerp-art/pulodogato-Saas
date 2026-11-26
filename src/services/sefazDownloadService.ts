@@ -102,19 +102,25 @@ export function decodificarChaveAcesso(chaveRaw: string): ChaveDecodificada {
   };
 }
 
-// Busca o XML de uma NF-e por chave de acesso diretamente da SEFAZ ou API Fiscal
+// Busca o XML real de uma NF-e por chave de acesso diretamente da SEFAZ / Focus NFe
 export async function baixarXmlSefazPorChave(params: {
   chaveAcesso: string;
   cnpjDestinatario: string;
   tokenFocus?: string;
   ambiente?: 'homologacao' | 'producao';
-}): Promise<{ xmlText: string; origem: 'focus_api' | 'sefaz_dfe' | 'banco_local' | 'sintetizada' }> {
+}): Promise<{ xmlText: string; origem: 'focus_api' | 'sefaz_dfe' | 'banco_local' }> {
   const chaveLimpa = params.chaveAcesso.replace(/\D/g, '');
   if (chaveLimpa.length !== 44) {
     throw new Error('Chave de acesso inválida. Deve conter exatamente 44 dígitos numéricos.');
   }
 
-  // 1. Verificar se a nota já foi baixada anteriormente no banco local
+  const dec = decodificarChaveAcesso(chaveLimpa);
+  if (!dec.valida && dec.motivoInvalido) {
+    throw new Error(dec.motivoInvalido);
+  }
+
+  // 1. Verificar se o XML real já foi importado anteriormente no banco local
+  // (Ignora XMLs sintéticos antigos marcados com SEFAZ_DFe_Distribuicao_v4.00)
   try {
     const { data: notaExistente } = await (supabase as any)
       .from('nfe_importadas')
@@ -122,22 +128,63 @@ export async function baixarXmlSefazPorChave(params: {
       .eq('chave_acesso', chaveLimpa)
       .maybeSingle();
 
-    if (notaExistente?.xml_raw && notaExistente.xml_raw.includes('<nfeProc')) {
+    if (
+      notaExistente?.xml_raw &&
+      notaExistente.xml_raw.includes('<infNFe') &&
+      !notaExistente.xml_raw.includes('SEFAZ_DFe_Distribuicao_v4.00')
+    ) {
       return { xmlText: notaExistente.xml_raw, origem: 'banco_local' };
     }
   } catch (err) {
     console.warn('Consulta no banco local aviso:', err);
   }
 
-  // 2. Se houver token da API Focus NFe, realiza o download direto
+  // 2. Se houver token da API Focus NFe, consulta via Edge Function (sem CORS) e depois direto
   if (params.tokenFocus && params.tokenFocus.trim()) {
+    try {
+      const { data: fnData, error: fnErr } = await supabase.functions.invoke('sefaz-dfe', {
+        body: {
+          action: 'baixar',
+          chaveAcesso: chaveLimpa,
+          cnpjDestinatario: params.cnpjDestinatario,
+          tokenFocus: params.tokenFocus.trim(),
+          ambiente: params.ambiente || 'producao',
+        },
+      });
+
+      if (!fnErr && fnData?.xmlText && fnData.xmlText.includes('<infNFe')) {
+        return { xmlText: fnData.xmlText, origem: 'sefaz_dfe' };
+      }
+      if (fnData?.error) {
+        throw new Error(fnData.error);
+      }
+    } catch (edgeErr: any) {
+      console.warn('Edge function sefaz-dfe indisponível, tentando API Focus direta:', edgeErr?.message);
+    }
+
     try {
       const endpointPrefix = params.ambiente === 'producao'
         ? 'https://api.focusnfe.com.br/v2'
         : 'https://homologacao.focusnfe.com.br/v2';
 
-      // Consulta a nota fiscal emitida contra o CNPJ
-      const res = await fetch(`${endpointPrefix}/nfe/${chaveLimpa}?completa=1`, {
+      // Endpoint oficial de NF-es recebidas contra o CNPJ (DF-e)
+      const resRecebida = await fetch(`${endpointPrefix}/nfes_recebidas/${chaveLimpa}.xml`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Basic ${btoa(`${params.tokenFocus.trim()}:`)}`,
+          'Accept': 'application/xml, text/xml',
+        },
+      });
+
+      if (resRecebida.ok) {
+        const xml = await resRecebida.text();
+        if (xml.includes('<infNFe')) {
+          return { xmlText: xml, origem: 'sefaz_dfe' };
+        }
+      }
+
+      // Fallback: nota emitida na própria conta Focus NFe
+      const resEmitida = await fetch(`${endpointPrefix}/nfe/${chaveLimpa}?completa=1`, {
         method: 'GET',
         headers: {
           'Authorization': `Basic ${btoa(`${params.tokenFocus.trim()}:`)}`,
@@ -145,193 +192,39 @@ export async function baixarXmlSefazPorChave(params: {
         },
       });
 
-      if (res.ok) {
-        const contentType = res.headers.get('content-type') || '';
+      if (resEmitida.ok) {
+        const contentType = resEmitida.headers.get('content-type') || '';
         if (contentType.includes('xml')) {
-          const xml = await res.text();
+          const xml = await resEmitida.text();
           if (xml.includes('<infNFe')) {
             return { xmlText: xml, origem: 'focus_api' };
           }
         } else {
-          const body = await res.json();
+          const body = await resEmitida.json();
           if (body.caminho_xml_nota_fiscal) {
             const xmlRes = await fetch(`https://api.focusnfe.com.br${body.caminho_xml_nota_fiscal}`);
             if (xmlRes.ok) {
               const xml = await xmlRes.text();
-              return { xmlText: xml, origem: 'focus_api' };
+              if (xml.includes('<infNFe')) {
+                return { xmlText: xml, origem: 'focus_api' };
+              }
             }
           }
         }
       }
     } catch (apiErr) {
-      console.warn('API Focus NFe falhou ou nota não originada na conta, tentando DFe SEFAZ', apiErr);
+      console.warn('API Focus NFe falhou:', apiErr);
     }
+
+    throw new Error(
+      `Chave válida (NF nº ${dec.numero} · CNPJ ${dec.cnpjEmitente}), mas a API Focus NFe não retornou o XML dos itens. Verifique se o Token está correto e com DF-e (NF-es Recebidas) habilitado, ou faça o upload do arquivo .xml da nota.`
+    );
   }
 
-  // 3. Fallback inteligente: decodifica a chave e gera o XML estrutural padrão SEFAZ Layout 4.00
-  // Permitindo que o operador confira os itens e confirme o recebimento no estoque
-  const dec = decodificarChaveAcesso(chaveLimpa);
-  if (!dec.valida && dec.motivoInvalido) {
-    throw new Error(dec.motivoInvalido);
-  }
-
-  const hoje = new Date().toISOString().split('T')[0];
-  const cnpjDestLimpo = params.cnpjDestinatario.replace(/\D/g, '') || '64514013000161';
-  const cnpjEmitLimpo = dec.cnpjEmitente.replace(/\D/g, '');
-
-  const xmlSintetico = `<?xml version="1.0" encoding="UTF-8"?>
-<nfeProc versao="4.00" xmlns="http://www.portalfiscal.inf.br/nfe">
-  <NFe xmlns="http://www.portalfiscal.inf.br/nfe">
-    <infNFe versao="4.00" Id="NFe${chaveLimpa}">
-      <ide>
-        <cUF>${dec.cUF}</cUF>
-        <cNF>${dec.codigoNumerico}</cNF>
-        <natOp>COMPRA PARA COMERCIALIZACAO</natOp>
-        <mod>${dec.modelo}</mod>
-        <serie>${dec.serie}</serie>
-        <nNF>${dec.numero}</nNF>
-        <dhEmi>${hoje}T10:00:00-04:00</dhEmi>
-        <tpNF>1</tpNF>
-        <idDest>1</idDest>
-        <cMunFG>${dec.cUF}00000</cMunFG>
-        <tpImp>1</tpImp>
-        <tpEmis>${dec.tipoEmissao}</tpEmis>
-        <cDV>${dec.digitoVerificador}</cDV>
-        <tpAmb>${params.ambiente === 'producao' ? '1' : '2'}</tpAmb>
-        <finNFe>1</finNFe>
-        <indFinal>0</indFinal>
-        <indPres>1</indPres>
-        <procEmi>0</procEmi>
-        <verProc>SEFAZ_DFe_Distribuicao_v4.00</verProc>
-      </ide>
-      <emit>
-        <CNPJ>${cnpjEmitLimpo}</CNPJ>
-        <xNome>DISTRIBUIDORA / FORNECEDOR PECA FACIL</xNome>
-        <xFant>FORNECEDOR ${dec.ufSigla}</xFant>
-        <enderEmit>
-          <xLgr>Av. Industrial Fornecedores</xLgr>
-          <nro>1000</nro>
-          <xBairro>Distrito Industrial</xBairro>
-          <cMun>${dec.cUF}00000</cMun>
-          <xMun>Capital</xMun>
-          <UF>${dec.ufSigla}</UF>
-          <CEP>79000000</CEP>
-          <cPais>1058</cPais>
-          <xPais>Brasil</xPais>
-        </enderEmit>
-        <IE>ISENTO</IE>
-        <CRT>3</CRT>
-      </emit>
-      <dest>
-        <CNPJ>${cnpjDestLimpo}</CNPJ>
-        <xNome>AUTO PECAS MGN LTDA</xNome>
-        <enderDest>
-          <xLgr>Rua Principal</xLgr>
-          <nro>S/N</nro>
-          <xBairro>Centro</xBairro>
-          <cMun>5002704</cMun>
-          <xMun>Campo Grande</xMun>
-          <UF>MS</UF>
-          <CEP>79000000</CEP>
-          <cPais>1058</cPais>
-          <xPais>Brasil</xPais>
-        </enderDest>
-        <indIEDest>1</indIEDest>
-      </dest>
-      <det nItem="1">
-        <prod>
-          <cProd>PECA-FORN-${dec.numero}-01</cProd>
-          <cEAN>SEM GTIN</cEAN>
-          <xProd>PECA AUTOMOTIVA RECEBIDA VIA SEFAZ - NF ${dec.numero}</xProd>
-          <NCM>87082999</NCM>
-          <CFOP>5102</CFOP>
-          <uCom>UN</uCom>
-          <qCom>1.0000</qCom>
-          <vUnCom>150.0000</vUnCom>
-          <vProd>150.00</vProd>
-          <cEANTrib>SEM GTIN</cEANTrib>
-          <uTrib>UN</uTrib>
-          <qTrib>1.0000</qTrib>
-          <vUnTrib>150.0000</vUnTrib>
-          <indTot>1</indTot>
-        </prod>
-        <imposto>
-          <ICMS>
-            <ICMSSN102>
-              <orig>0</orig>
-              <CSOSN>102</CSOSN>
-            </ICMSSN102>
-          </ICMS>
-          <PIS>
-            <PISOutr>
-              <CST>99</CST>
-              <vBC>150.00</vBC>
-              <pPIS>1.65</pPIS>
-              <vPIS>2.48</vPIS>
-            </PISOutr>
-          </PIS>
-          <COFINS>
-            <COFINSOutr>
-              <CST>99</CST>
-              <vBC>150.00</vBC>
-              <pCOFINS>7.60</pCOFINS>
-              <vCOFINS>11.40</vCOFINS>
-            </COFINSOutr>
-          </COFINS>
-        </imposto>
-      </det>
-      <total>
-        <ICMSTot>
-          <vBC>150.00</vBC>
-          <vICMS>25.50</vICMS>
-          <vICMSDeson>0.00</vICMSDeson>
-          <vFCP>0.00</vFCP>
-          <vBCST>0.00</vBCST>
-          <vST>0.00</vST>
-          <vFCPST>0.00</vFCPST>
-          <vFCPSTRet>0.00</vFCPSTRet>
-          <vProd>150.00</vProd>
-          <vFrete>0.00</vFrete>
-          <vSeg>0.00</vSeg>
-          <vDesc>0.00</vDesc>
-          <vII>0.00</vII>
-          <vIPI>0.00</vIPI>
-          <vIPIDevol>0.00</vIPIDevol>
-          <vPIS>2.48</vPIS>
-          <vCOFINS>11.40</vCOFINS>
-          <vOutro>0.00</vOutro>
-          <vNF>150.00</vNF>
-        </ICMSTot>
-      </total>
-      <transp>
-        <modFrete>9</modFrete>
-      </transp>
-      <pag>
-        <detPag>
-          <tPag>15</tPag>
-          <vPag>150.00</vPag>
-        </detPag>
-      </pag>
-      <infAdic>
-        <infCpl>Documento recebido via distribuicao de DF-e SEFAZ emitido contra o CNPJ ${formatarCnpj(cnpjDestLimpo)}.</infCpl>
-      </infAdic>
-    </infNFe>
-  </NFe>
-  <protNFe versao="4.00">
-    <infProt>
-      <tpAmb>${params.ambiente === 'producao' ? '1' : '2'}</tpAmb>
-      <verAplic>SEFAZ_DISTRIBUICAO_4.00</verAplic>
-      <chNFe>${chaveLimpa}</chNFe>
-      <dhRecbto>${hoje}T10:00:00-04:00</dhRecbto>
-      <nProt>1${dec.cUF}26${String(Math.floor(1000000000 + Math.random() * 9000000000))}</nProt>
-      <digVal>zF8Q/3aK409PmL9A8e90c=</digVal>
-      <cStat>100</cStat>
-      <xMotivo>Autorizado o uso da NF-e na SEFAZ</xMotivo>
-    </infProt>
-  </protNFe>
-</nfeProc>`;
-
-  return { xmlText: xmlSintetico, origem: 'sefaz_dfe' };
+  // Nunca gera itens falsos (ex.: R$ 150,00) quando não há conexão SEFAZ configurada
+  throw new Error(
+    `Chave decodificada (NF nº ${dec.numero} · Série ${dec.serie} · CNPJ ${dec.cnpjEmitente}), porém o navegador não consegue baixar os itens e valores direto da SEFAZ sem o Token da API Fiscal (Focus NFe) configurado em Configuração Fiscal. Configure o Token ou importe usando "Upload de Arquivo XML".`
+  );
 }
 
 // Lista notas fiscais emitidas contra o CNPJ da empresa
@@ -371,8 +264,8 @@ export async function listarNotasEmitidasContraCnpj(params: {
   if (params.tokenFocus && params.tokenFocus.trim()) {
     try {
       const endpoint = params.ambiente === 'producao'
-        ? `https://api.focusnfe.com.br/v2/dres?cnpj=${cnpjLimpo}`
-        : `https://homologacao.focusnfe.com.br/v2/dres?cnpj=${cnpjLimpo}`;
+        ? `https://api.focusnfe.com.br/v2/nfes_recebidas?cnpj=${cnpjLimpo}`
+        : `https://homologacao.focusnfe.com.br/v2/nfes_recebidas?cnpj=${cnpjLimpo}`;
 
       const res = await fetch(endpoint, {
         headers: { 'Authorization': `Basic ${btoa(`${params.tokenFocus.trim()}:`)}` },
