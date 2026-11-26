@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
-import ghubLogo from '@/assets/ghub-logo.png';
+import logoPuloDoGato from '@/assets/logo-pulo-do-gato.jpg';
 import { Eye, EyeOff, Mail, Lock, Loader2 } from 'lucide-react';
 
 type Mode = 'login' | 'register' | 'forgot';
@@ -67,7 +67,9 @@ export default function Login() {
     <div className="min-h-screen flex" style={{ background: 'hsl(var(--sidebar-background))' }}>
       {/* Left panel */}
       <div className="hidden lg:flex flex-col justify-between w-[420px] flex-shrink-0 p-10 border-r" style={{ borderColor: 'hsl(var(--sidebar-border))' }}>
-        <img src={ghubLogo} alt="GHub" className="h-10 w-auto object-contain" />
+        <div className="flex items-center gap-3">
+          <img src={logoPuloDoGato} alt="PULO DO GATO" className="h-24 w-auto object-contain rounded-xl" />
+        </div>
         <div>
           <h2 className="text-3xl font-bold text-white leading-snug mb-4">
             Gestão inteligente<br />de autopeças
@@ -93,7 +95,9 @@ export default function Login() {
         <div className="w-full max-w-[400px]">
           {/* Mobile logo */}
           <div className="flex justify-center mb-8 lg:hidden">
-            <img src={ghubLogo} alt="GHub" className="h-10 w-auto object-contain" />
+            <div className="flex items-center gap-3">
+          <img src={logoPuloDoGato} alt="PULO DO GATO" className="h-24 w-auto object-contain rounded-xl" />
+        </div>
           </div>
 
           <div className="rounded-2xl border p-8" style={{ background: 'hsl(var(--sidebar-accent))', borderColor: 'hsl(var(--sidebar-border))' }}>

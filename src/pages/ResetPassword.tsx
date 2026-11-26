@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
-import ghubLogo from '@/assets/ghub-logo.png';
+import logoPuloDoGato from '@/assets/logo-pulo-do-gato.jpg';
 import { Lock, Loader2 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
@@ -40,7 +40,7 @@ export default function ResetPassword() {
     <div className="min-h-screen flex items-center justify-center p-6" style={{ background: 'hsl(var(--sidebar-background))' }}>
       <div className="w-full max-w-[380px]">
         <div className="flex justify-center mb-8">
-          <img src={ghubLogo} alt="GHub" className="h-10 w-auto" />
+          <img src={logoPuloDoGato} alt="PULO DO GATO" className="h-20 w-auto rounded-xl object-contain" />
         </div>
         <div className="rounded-2xl border p-8" style={{ background: 'hsl(var(--sidebar-accent))', borderColor: 'hsl(var(--sidebar-border))' }}>
           <h1 className="text-xl font-bold text-white mb-1">Nova senha</h1>

@@ -12,6 +12,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { supabase } from '@/integrations/supabase/client';
 import { useCadastroModal } from '@/contexts/CadastroModalContext';
 import GlobalCadastros from './GlobalCadastros';
+import logoPuloDoGato from '@/assets/logo-pulo-do-gato.jpg';
 
 interface AppContextType {
   userRole: UserRole;
@@ -69,14 +70,19 @@ export default function Layout({ children }: LayoutProps) {
   const SidebarContent = () => (
     <>
       {/* Logo */}
-      <div className="flex items-center gap-3 px-4 py-5 border-b border-sidebar-border">
-        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary flex-shrink-0">
-          <Wrench className="h-5 w-5 text-primary-foreground" />
-        </div>
+      <div className="flex items-center gap-3 px-3 py-4 border-b border-sidebar-border">
+        <img
+          src={logoPuloDoGato}
+          alt="PULO DO GATO"
+          className={cn(
+            'rounded-lg object-cover flex-shrink-0 border border-primary/30',
+            collapsed ? 'h-9 w-9' : 'h-11 w-14'
+          )}
+        />
         {!collapsed && (
           <div className="min-w-0">
-            <p className="font-bold text-white text-sm leading-tight truncate">G Autopeças & Acessórios</p>
-            <p className="text-xs" style={{ color: 'hsl(var(--sidebar-foreground))' }}>Autopeças</p>
+            <p className="font-black text-white text-sm leading-tight tracking-wide truncate">PULO DO GATO</p>
+            <p className="text-[11px] truncate" style={{ color: 'hsl(var(--sidebar-foreground))' }}>Gestão de Estoque</p>
           </div>
         )}
       </div>

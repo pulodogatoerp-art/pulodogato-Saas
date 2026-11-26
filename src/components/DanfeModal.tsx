@@ -335,7 +335,7 @@ export default function DanfeModal({ dados, resultado, onClose }: DanfeModalProp
             </div>
             <div className="p-1.5 text-[8px] text-gray-800 leading-normal min-h-[45px]">
               <p><strong>Informações Complementares:</strong> {dados.informacoesAdicionais || 'Documento emitido por ME ou EPP optante pelo Simples Nacional. Não gera direito a crédito fiscal de IPI.'}</p>
-              <p className="mt-1 text-gray-600 font-mono">Venda ref: {dados.vendaNumero} | Emissor: PeçaFácil Pro | Regime Especial ICMS MS</p>
+              <p className="mt-1 text-gray-600 font-mono">Venda ref: {dados.vendaNumero} | Emissor: PULO DO GATO | Regime Especial ICMS MS</p>
             </div>
           </div>
 

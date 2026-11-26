@@ -341,7 +341,7 @@ export default function DanfeNfceModal({ dados, resultado, onClose }: DanfeNfceM
             <div className="pt-2 text-center text-[8px] text-gray-600 space-y-0.5">
               <p>Consulte pela Chave de Acesso em:</p>
               <p className="font-semibold text-black">http://www.dfe.ms.gov.br/nfce/consulta</p>
-              <p className="text-[7.5px] text-gray-500 pt-1">PeçaFácil Pro • Sistema de Gestão e Emissão Fiscal</p>
+              <p className="text-[7.5px] text-gray-500 pt-1">PULO DO GATO • Sistema de Gestão e Emissão Fiscal</p>
             </div>
 
           </div>
