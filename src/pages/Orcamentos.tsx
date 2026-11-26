@@ -821,7 +821,10 @@ export default function Orcamentos() {
       // Cliente definitivo para a venda (se alterado na hora de fechar)
       const cliFinalId = clienteFechamento?.id || selectedOrc.cliente_id;
       const validCliFinalId = (cliFinalId && cliFinalId !== '00000000-0000-0000-0000-000000000001') ? cliFinalId : null;
-      const cliFinalNome = clienteFechamento?.nome || selectedOrc.cliente_nome;
+      const cliFinalNome = clienteFechamento?.nome || selectedOrc.cliente_nome || 'Consumidor Final (Balcão)';
+      const rawCpf = clienteFechamento?.cpf_cnpj || selectedOrc.cliente_cpf_cnpj || '';
+      const cliFinalCpf = rawCpf.replace(/\D/g, '') === '00000000000' ? '' : rawCpf;
+      const cliFinalTel = clienteFechamento?.telefone || selectedOrc.cliente_telefone || '';
 
       // 2. Create venda - usa apenas colunas padrão da tabela vendas no Supabase
       const { data: venda, error: vendaErr } = await supabase.from('vendas').insert({
