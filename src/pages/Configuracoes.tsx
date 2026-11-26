@@ -270,11 +270,11 @@ export default function Configuracoes() {
             </div>
             <span className={cn(
               "text-xs px-2.5 py-0.5 rounded-full font-semibold",
-              (form['nfe_ambiente'] || 'homologacao') === 'producao'
+              (form['nfe_ambiente'] || 'producao') === 'producao'
                 ? "bg-emerald-500/15 text-emerald-600"
                 : "bg-amber-500/15 text-amber-600"
             )}>
-              {(form['nfe_ambiente'] || 'homologacao') === 'producao' ? '● Ambiente Produção (Real)' : '○ Ambiente Homologação (Testes)'}
+              {(form['nfe_ambiente'] || 'producao') === 'producao' ? '● Ambiente Produção (Real)' : '○ Ambiente Homologação (Testes)'}
             </span>
           </div>
           <div className="p-5 space-y-6">
@@ -284,7 +284,7 @@ export default function Configuracoes() {
                   Ambiente de Emissão
                 </label>
                 <select
-                  value={form['nfe_ambiente'] || 'homologacao'}
+                  value={form['nfe_ambiente'] || 'producao'}
                   onChange={e => update('nfe_ambiente', e.target.value)}
                   disabled={!isAdmin}
                   className="w-full rounded-md border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"

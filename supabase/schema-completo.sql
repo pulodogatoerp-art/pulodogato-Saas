@@ -239,7 +239,7 @@ INSERT INTO public.configuracoes (chave, valor) VALUES
   ('cofins_percentual', '7.6'),
   ('infinitepay_habilitado', 'false'),
   ('mercadopago_habilitado', 'false'),
-  ('nfe_ambiente', 'homologacao'),
+  ('nfe_ambiente', 'producao'),
   ('nfe_regime_tributario', '1'),
   ('nfe_serie', '1'),
   ('nfe_proximo_numero', '1'),

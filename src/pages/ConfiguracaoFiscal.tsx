@@ -134,7 +134,7 @@ export default function ConfiguracaoFiscal() {
     </div>
   );
 
-  const ambienteAtual = form['nfe_ambiente'] || 'homologacao';
+  const ambienteAtual = form['nfe_ambiente'] || 'producao';
   const regimeAtual = form['nfe_regime_tributario'] || '1';
 
   const handleTestarNfceHomologacao = async () => {
@@ -562,7 +562,7 @@ export default function ConfiguracaoFiscal() {
                     Ambiente SEFAZ
                   </label>
                   <select
-                    value={form['nfe_ambiente'] || 'homologacao'}
+                    value={form['nfe_ambiente'] || 'producao'}
                     onChange={e => update('nfe_ambiente', e.target.value)}
                     disabled={!isAdmin}
                     className="w-full rounded-lg border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary"

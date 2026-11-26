@@ -919,7 +919,7 @@ export default function Orcamentos() {
           const isNfce = emissaoFiscal === 'nfce';
           const serie = isNfce ? (configFiscal?.['nfce_serie'] || '1') : (configFiscal?.['nfe_serie'] || '1');
           const proximoNum = parseInt(isNfce ? (configFiscal?.['nfce_proximo_numero'] || '1') : (configFiscal?.['nfe_proximo_numero'] || '1'), 10);
-          const ambiente = (configFiscal?.['nfe_ambiente'] || 'homologacao') as 'homologacao' | 'producao';
+          const ambiente = (configFiscal?.['nfe_ambiente'] || 'producao') as 'homologacao' | 'producao';
           const natOp = isNfce ? 'VENDA AO CONSUMIDOR' : (configFiscal?.['nfe_natureza_operacao'] || 'Venda de mercadoria adquirida de terceiros');
           const cfopPadrao = configFiscal?.['nfe_cfop_padrao'] || '5102';
 
@@ -943,8 +943,8 @@ export default function Orcamentos() {
               ? (configFiscal?.['nfce_id_csc_homologacao'] || configFiscal?.['nfce_id_csc'] || '000001')
               : (configFiscal?.['nfce_id_csc'] || '000001'),
             cscToken: ambiente === 'homologacao'
-              ? (configFiscal?.['nfce_csc_homologacao'] || configFiscal?.['nfce_csc'] || '')
-              : (configFiscal?.['nfce_csc'] || ''),
+              ? (configFiscal?.['nfce_csc_homologacao'] || configFiscal?.['nfce_csc'] || 'ffa0a4ef9c0175f8e08893a1b45c5ef39661')
+              : (configFiscal?.['nfce_csc'] || '801f32f748c67f2b31b530e515983c469c37'),
             emitente: {
               cnpj: configFiscal?.['empresa_cnpj'] || '',
               razaoSocial: configFiscal?.['empresa_nome'] || (empresa as any)?.empresa_nome || 'G Autopeças & Acessórios',

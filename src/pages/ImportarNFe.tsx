@@ -183,7 +183,7 @@ export default function ImportarNFe({ defaultTab = 'entrada' }: { defaultTab?: '
 
   const cnpjEmpresa = config?.['empresa_cnpj'] || '';
   const tokenFocus = config?.['nfe_focus_token'] || '';
-  const ambienteSefaz = (config?.['nfe_ambiente'] || 'homologacao') as 'homologacao' | 'producao';
+  const ambienteSefaz = (config?.['nfe_ambiente'] || 'producao') as 'homologacao' | 'producao';
 
   // Decodificação em tempo real da chave digitada
   const chaveInfo = useMemo(() => {

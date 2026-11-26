@@ -194,7 +194,7 @@ export default function Vendas() {
     try {
       const serie = isNfce ? (config?.['nfce_serie'] || '1') : (config?.['nfe_serie'] || '1');
       const proximoNum = parseInt(isNfce ? (config?.['nfce_proximo_numero'] || '1') : (config?.['nfe_proximo_numero'] || '1'), 10);
-      const ambiente = (config?.['nfe_ambiente'] || 'homologacao') as 'homologacao' | 'producao';
+      const ambiente = (config?.['nfe_ambiente'] || 'producao') as 'homologacao' | 'producao';
       const natOp = isNfce ? 'VENDA AO CONSUMIDOR' : (config?.['nfe_natureza_operacao'] || 'Venda de mercadoria adquirida de terceiros');
       const cfopPadrao = config?.['nfe_cfop_padrao'] || '5102';
       const tokenFocus = config?.['nfe_focus_token'] || '';
@@ -222,8 +222,8 @@ export default function Vendas() {
           ? (config?.['nfce_id_csc_homologacao'] || config?.['nfce_id_csc'] || '000001')
           : (config?.['nfce_id_csc'] || '000001'),
         cscToken: ambiente === 'homologacao'
-          ? (config?.['nfce_csc_homologacao'] || config?.['nfce_csc'] || '')
-          : (config?.['nfce_csc'] || ''),
+          ? (config?.['nfce_csc_homologacao'] || config?.['nfce_csc'] || 'ffa0a4ef9c0175f8e08893a1b45c5ef39661')
+          : (config?.['nfce_csc'] || '801f32f748c67f2b31b530e515983c469c37'),
         emitente: {
           cnpj: cnpjEmpresa,
           razaoSocial: config?.['empresa_nome'] || 'G Autopeças & Acessórios',
@@ -304,7 +304,7 @@ export default function Vendas() {
     try {
       const { venda, nfeRecord } = docParaCancelar;
       const tipoDoc: TipoDocumentoFiscal = (nfeRecord?.tipo || venda.tipo_documento_fiscal) === 'nfce' ? 'nfce' : 'nfe';
-      const ambiente = (config?.['nfe_ambiente'] || 'homologacao') as 'homologacao' | 'producao';
+      const ambiente = (config?.['nfe_ambiente'] || 'producao') as 'homologacao' | 'producao';
       const res = await cancelarDocumentoFiscal({
         vendaId: venda.id,
         vendaNumero: venda.numero,
@@ -352,7 +352,7 @@ export default function Vendas() {
       numero: nfeRecord?.numero || Number(venda.nfe_numero || 1),
       modelo: isNfce ? '65' : '55',
       tipo: isNfce ? 'nfce' : 'nfe',
-      ambiente: (config?.['nfe_ambiente'] || 'homologacao') as 'homologacao' | 'producao',
+      ambiente: (config?.['nfe_ambiente'] || 'producao') as 'homologacao' | 'producao',
       formaPagamento: venda.forma_pagamento || 'Dinheiro',
       freteModalidade: freteVal > 0 ? 0 : 9,
       freteTransportadora: venda.frete_transportadora,
