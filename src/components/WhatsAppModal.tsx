@@ -28,7 +28,7 @@ export default function WhatsAppModal({ cliente, itens, total, numeroOrcamento, 
     },
   });
 
-  const nomeEmpresa = empresa?.empresa_nome?.trim() || 'Autopeças MGN';
+  const nomeEmpresa = empresa?.empresa_nome_fantasia?.trim() || empresa?.empresa_nome?.trim() || 'G Autopeças & Acessórios';
   const telefoneLoja = empresa?.empresa_telefone?.trim();
   const contatoLinha = telefoneLoja ? `\n\n📱 *${nomeEmpresa}* — ${telefoneLoja}` : `\n\n📱 *${nomeEmpresa}*`;
 

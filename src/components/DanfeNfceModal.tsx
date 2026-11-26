@@ -2,6 +2,7 @@ import React, { useRef } from 'react';
 import { Printer, Download, X, CheckCircle, ShieldCheck, Copy, Receipt } from 'lucide-react';
 import { NFeVendaData, NFeResultado, formatarChave, baixarXmlNFe } from '@/services/nfeService';
 import { useToast } from '@/hooks/use-toast';
+import logoGAutopecas from '@/assets/logo-g-autopecas.jpg';
 
 interface DanfeNfceModalProps {
   dados: NFeVendaData;
@@ -168,9 +169,14 @@ export default function DanfeNfceModal({ dados, resultado, onClose }: DanfeNfceM
           >
             {/* Cabeçalho da Empresa */}
             <div className="text-center pb-2 border-b border-dashed border-gray-400">
-              <p className="font-bold text-sm tracking-tight">{dados.emitente.razaoSocial}</p>
-              {dados.emitente.nomeFantasia && dados.emitente.nomeFantasia !== dados.emitente.razaoSocial && (
-                <p className="text-[10px] text-gray-700 font-semibold">{dados.emitente.nomeFantasia}</p>
+              <img
+                src={logoGAutopecas}
+                alt="G Autopeças & Acessórios"
+                className="w-20 h-20 object-contain mx-auto mb-1.5 rounded-lg bg-black"
+              />
+              <p className="font-bold text-sm tracking-tight">{dados.emitente.nomeFantasia || 'G Autopeças & Acessórios'}</p>
+              {dados.emitente.razaoSocial && dados.emitente.razaoSocial !== (dados.emitente.nomeFantasia || 'G Autopeças & Acessórios') && (
+                <p className="text-[10px] text-gray-700 font-semibold">{dados.emitente.razaoSocial}</p>
               )}
               <p className="text-[10px] mt-0.5">CNPJ: {dados.emitente.cnpj}</p>
               <p className="text-[10px]">IE: {dados.emitente.ie || 'ISENTO'}</p>

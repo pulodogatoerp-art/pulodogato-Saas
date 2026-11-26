@@ -226,7 +226,8 @@ export default function Vendas() {
           : (config?.['nfce_csc'] || ''),
         emitente: {
           cnpj: cnpjEmpresa,
-          razaoSocial: config?.['empresa_nome'] || 'AutoPeças',
+          razaoSocial: config?.['empresa_nome'] || 'G Autopeças & Acessórios',
+          nomeFantasia: config?.['empresa_nome_fantasia'] || 'G Autopeças & Acessórios',
           ie: config?.['empresa_ie'] || 'ISENTO',
           endereco: config?.['empresa_endereco'] || 'Rua Principal',
           cidade: config?.['empresa_cidade'] || 'Campo Grande',
@@ -360,7 +361,8 @@ export default function Vendas() {
       totalVenda: Number(venda.total),
       emitente: {
         cnpj: config?.['empresa_cnpj'] || '00.000.000/0000-00',
-        razaoSocial: config?.['empresa_nome'] || 'AutoPeças MGN',
+        razaoSocial: config?.['empresa_nome'] || 'G Autopeças & Acessórios',
+        nomeFantasia: config?.['empresa_nome_fantasia'] || 'G Autopeças & Acessórios',
         ie: config?.['empresa_ie'] || 'ISENTO',
         endereco: config?.['empresa_endereco'] || 'Rua Principal',
         cidade: config?.['empresa_cidade'] || 'Campo Grande',

@@ -20,7 +20,7 @@ interface AppContextType {
 
 export const AppContext = createContext<AppContextType>({
   userRole: 'admin',
-  setUserRole: () => {},
+  setUserRole: () => { },
 });
 
 export const useAppContext = () => useContext(AppContext);
@@ -75,7 +75,7 @@ export default function Layout({ children }: LayoutProps) {
         </div>
         {!collapsed && (
           <div className="min-w-0">
-            <p className="font-bold text-white text-sm leading-tight">Autopeças MGN</p>
+            <p className="font-bold text-white text-sm leading-tight truncate">G Autopeças & Acessórios</p>
             <p className="text-xs" style={{ color: 'hsl(var(--sidebar-foreground))' }}>Autopeças</p>
           </div>
         )}

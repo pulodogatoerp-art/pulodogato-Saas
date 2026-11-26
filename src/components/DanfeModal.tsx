@@ -1,6 +1,7 @@
 import React from 'react';
 import { Printer, Download, X, CheckCircle, ShieldCheck } from 'lucide-react';
 import { NFeVendaData, NFeResultado, formatarChave, baixarXmlNFe } from '@/services/nfeService';
+import logoGAutopecas from '@/assets/logo-g-autopecas.jpg';
 
 interface DanfeModalProps {
   dados: NFeVendaData;
@@ -106,12 +107,19 @@ export default function DanfeModal({ dados, resultado, onClose }: DanfeModalProp
             
             {/* Emitente */}
             <div className="col-span-12 sm:col-span-5 p-2 border-b sm:border-b-0 sm:border-r border-black flex flex-col justify-between">
-              <div>
-                <h1 className="font-bold text-xs uppercase tracking-tight">{dados.emitente.razaoSocial}</h1>
-                <p className="font-semibold text-[9px] text-gray-700">{dados.emitente.nomeFantasia || dados.emitente.razaoSocial}</p>
-                <p className="mt-1">{dados.emitente.endereco}</p>
-                <p>{dados.emitente.cidade || 'Campo Grande'} - {dados.emitente.uf || 'MS'} | CEP: {dados.emitente.cep || '79000-000'}</p>
-                {dados.emitente.telefone && <p>Fone: {dados.emitente.telefone}</p>}
+              <div className="flex items-start gap-2.5">
+                <img
+                  src={logoGAutopecas}
+                  alt="G Autopeças & Acessórios"
+                  className="w-14 h-14 object-contain rounded-md shrink-0 bg-black"
+                />
+                <div className="min-w-0">
+                  <h1 className="font-bold text-xs uppercase tracking-tight">{dados.emitente.nomeFantasia || 'G Autopeças & Acessórios'}</h1>
+                  <p className="font-semibold text-[9px] text-gray-700">{dados.emitente.razaoSocial}</p>
+                  <p className="mt-1">{dados.emitente.endereco}</p>
+                  <p>{dados.emitente.cidade || 'Campo Grande'} - {dados.emitente.uf || 'MS'} | CEP: {dados.emitente.cep || '79000-000'}</p>
+                  {dados.emitente.telefone && <p>Fone: {dados.emitente.telefone}</p>}
+                </div>
               </div>
               <div className="mt-2 pt-1 border-t border-dashed border-gray-400 font-mono text-[9px]">
                 <p>CNPJ: <strong>{dados.emitente.cnpj}</strong></p>

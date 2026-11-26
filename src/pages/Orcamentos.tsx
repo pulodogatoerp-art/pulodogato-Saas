@@ -5,7 +5,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { useToast } from '@/hooks/use-toast';
 import { cn } from '@/lib/utils';
-import logoMgn from '@/assets/logo-mgn.png';
+import logoGAutopecas from '@/assets/logo-g-autopecas.jpg';
 import ProdutoModal, { SimulacaoCustoSnapshot } from '@/components/ProdutoModal';
 import { useCadastroModal } from '@/contexts/CadastroModalContext';
 import BuscaPecasIA from '@/components/BuscaPecasIA';
@@ -297,12 +297,15 @@ function CupomFiscal({ orcamento, itens, empresa }: {
         {/* Header */}
         <div className="text-center mb-1">
           <img
-            src={`${window.location.origin}${logoMgn}`}
-            alt="Autopeças MGN"
-            style={{ width: '120px', height: 'auto', margin: '0 auto 6px', display: 'block' }}
+            src={logoGAutopecas.startsWith('data:') || logoGAutopecas.startsWith('http') ? logoGAutopecas : `${window.location.origin}${logoGAutopecas}`}
+            alt="G Autopeças & Acessórios"
+            style={{ width: '110px', height: 'auto', margin: '0 auto 6px', display: 'block', borderRadius: '10px' }}
             crossOrigin="anonymous"
           />
-          <p className="font-bold text-sm">{empresa.empresa_nome || 'Autopeças MGN'}</p>
+          <p className="font-bold text-sm">{empresa.empresa_nome_fantasia || 'G Autopeças & Acessórios'}</p>
+          {empresa.empresa_nome && empresa.empresa_nome !== (empresa.empresa_nome_fantasia || 'G Autopeças & Acessórios') && (
+            <p className="text-[10px] font-semibold">{empresa.empresa_nome}</p>
+          )}
           {empresa.empresa_cnpj && <p>CNPJ: {empresa.empresa_cnpj}</p>}
           {empresa.empresa_endereco && <p className="text-[10px]">{empresa.empresa_endereco}</p>}
           {empresa.empresa_telefone && <p>Tel: {empresa.empresa_telefone}</p>}
@@ -944,7 +947,8 @@ export default function Orcamentos() {
               : (configFiscal?.['nfce_csc'] || ''),
             emitente: {
               cnpj: configFiscal?.['empresa_cnpj'] || '',
-              razaoSocial: configFiscal?.['empresa_nome'] || (empresa as any)?.empresa_nome || 'Autopeças MGN',
+              razaoSocial: configFiscal?.['empresa_nome'] || (empresa as any)?.empresa_nome || 'G Autopeças & Acessórios',
+              nomeFantasia: configFiscal?.['empresa_nome_fantasia'] || (empresa as any)?.empresa_nome_fantasia || 'G Autopeças & Acessórios',
               ie: configFiscal?.['empresa_ie'] || (empresa as any)?.empresa_ie || 'ISENTO',
               endereco: configFiscal?.['empresa_endereco'] || (empresa as any)?.empresa_endereco || 'Rua Principal',
               cidade: configFiscal?.['empresa_cidade'] || 'Campo Grande',
@@ -1262,7 +1266,7 @@ export default function Orcamentos() {
 
         {/* Modal WhatsApp */}
         {showWaModal && (() => {
-          const nomeEmpresa = (empresa as any)?.empresa_nome?.trim() || 'Autopeças MGN';
+          const nomeEmpresa = (empresa as any)?.empresa_nome_fantasia?.trim() || (empresa as any)?.empresa_nome?.trim() || 'G Autopeças & Acessórios';
           const telLoja = (empresa as any)?.empresa_telefone?.trim();
           const rodape = telLoja ? `\n\n📱 *${nomeEmpresa}* — ${telLoja}` : `\n\n📱 *${nomeEmpresa}*`;
           const msg = `Olá ${selectedOrc.cliente_nome || 'cliente'}! 👋\n\nSegue seu orçamento *${selectedOrc.numero}* da *${nomeEmpresa}*:\n\n${(itensDetail ?? []).map(i => `• ${i.produto_nome} (${i.quantidade}x) — ${fmt(i.subtotal)}`).join('\n')}\n\n*Total: ${fmt(selectedOrc.total)}*\n\nVálido por 3 dias. Qualquer dúvida estamos à disposição! 😊${rodape}`;
