@@ -1,5 +1,5 @@
 import { useAppContext } from '@/components/Layout';
-import { ShoppingCart, Loader2, Eye, X, FileText, Printer, Download, CheckCircle, AlertCircle, Send, Receipt, UserCheck, XCircle } from 'lucide-react';
+import { ShoppingCart, Loader2, Eye, X, FileText, Printer, Download, CheckCircle, AlertCircle, Send, Receipt, UserCheck, XCircle, Truck } from 'lucide-react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { useState } from 'react';
@@ -17,6 +17,7 @@ import {
 } from '@/services/nfeService';
 import DanfeModal from '@/components/DanfeModal';
 import DanfeNfceModal from '@/components/DanfeNfceModal';
+import EtiquetaTransporteModal, { EtiquetaTransporteProps } from '@/components/EtiquetaTransporteModal';
 
 interface VendaDB {
   id: string;
@@ -112,6 +113,7 @@ export default function Vendas() {
   const [docParaCancelar, setDocParaCancelar] = useState<{ venda: VendaDB; nfeRecord?: NFeResultado | null } | null>(null);
   const [justificativaCancelamento, setJustificativaCancelamento] = useState('');
   const [cancelando, setCancelando] = useState(false);
+  const [etiquetaAtiva, setEtiquetaAtiva] = useState<EtiquetaTransporteProps['dados'] | null>(null);
 
   // Formulário do destinatário para emissão (permite conferir/editar dados no modal)
   const [destinatarioForm, setDestinatarioForm] = useState({
@@ -338,6 +340,49 @@ export default function Vendas() {
     }
   };
 
+  const handleAbrirEtiquetaTransporte = async (venda: VendaDB, nfeRecord?: NFeResultado | null) => {
+    const [{ data: itens }, clienteRes] = await Promise.all([
+      supabase.from('itens_venda').select('produto_codigo, produto_nome, quantidade').eq('venda_id', venda.id),
+      venda.cliente_id
+        ? supabase.from('clientes').select('nome, cpf_cnpj, endereco, telefone').eq('id', venda.cliente_id).maybeSingle()
+        : Promise.resolve({ data: null }),
+    ]);
+
+    const cli = (clienteRes as any)?.data;
+    setEtiquetaAtiva({
+      numeroVenda: venda.numero,
+      dataEmissao: new Date(venda.created_at),
+      chaveNfe: nfeRecord?.chaveAcesso || venda.nfe_chave || undefined,
+      numeroNfce: String(nfeRecord?.numero || venda.nfe_numero || '') || undefined,
+      valorTotal: Number(venda.total),
+      freteTransportadora: venda.frete_transportadora || undefined,
+      freteValor: Number(venda.frete_valor || 0),
+      remetente: {
+        nomeFantasia: config?.['empresa_nome_fantasia'] || 'G Autopeças & Acessórios',
+        razaoSocial: config?.['empresa_nome'] || '',
+        cnpj: config?.['empresa_cnpj'] || '',
+        endereco: config?.['empresa_endereco'] || '',
+        cidade: config?.['empresa_cidade'] || 'Campo Grande',
+        uf: config?.['empresa_uf'] || 'MS',
+        cep: config?.['empresa_cep'] || '',
+        telefone: config?.['empresa_telefone'] || '',
+      },
+      destinatario: {
+        nome: cli?.nome || venda.cliente_nome || 'Consumidor Final',
+        cpfCnpj: cli?.cpf_cnpj || '',
+        endereco: cli?.endereco || '',
+        cidade: config?.['empresa_cidade'] || 'Campo Grande',
+        uf: config?.['empresa_uf'] || 'MS',
+        telefone: cli?.telefone || '',
+      },
+      itens: (itens ?? []).map((it: any) => ({
+        codigo: it.produto_codigo || '',
+        descricao: it.produto_nome || 'Peça Automotiva',
+        quantidade: Number(it.quantidade || 1),
+      })),
+    });
+  };
+
   // Abrir documento já emitido anteriormente (NFC-e ou NF-e)
   const handleAbrirDanfeExistente = (venda: VendaDB, nfeRecord?: NFeResultado | null) => {
     const isNfce = (nfeRecord?.tipo || venda.tipo_documento_fiscal) === 'nfce';
@@ -560,21 +605,22 @@ export default function Vendas() {
                               <button
                                 onClick={() => handleAbrirEmissao(v, 'nfce')}
                                 className="px-2.5 py-1 text-xs font-semibold rounded-md bg-emerald-600 text-white hover:bg-emerald-500 transition-colors flex items-center gap-1 shadow-sm"
-                                title="Emitir Cupom Fiscal (NFC-e) para consumidor balcão"
+                                title="Emitir Cupom Fiscal (NFC-e)"
                               >
                                 <Receipt size={13} />
                                 Cupom (NFC-e)
                               </button>
-                              <button
-                                onClick={() => handleAbrirEmissao(v, 'nfe')}
-                                className="px-2.5 py-1 text-xs font-semibold rounded-md border hover:bg-muted transition-colors flex items-center gap-1 shadow-sm"
-                                title="Emitir NF-e (DANFE A4) completa"
-                              >
-                                <FileText size={13} />
-                                NF-e
-                              </button>
                             </div>
                           )}
+
+                          <button
+                            onClick={() => handleAbrirEtiquetaTransporte(v, nfeRecord)}
+                            className="px-2 py-1 text-xs font-semibold rounded-md border border-amber-500/40 text-amber-700 dark:text-amber-400 hover:bg-amber-500/10 transition-colors flex items-center gap-1"
+                            title="Gerar Nota Resumida / Etiqueta de Transporte"
+                          >
+                            <Truck size={13} />
+                            Etiqueta
+                          </button>
 
                           <button
                             onClick={() => setSelectedId(v.id)}
@@ -619,50 +665,15 @@ export default function Vendas() {
             </div>
 
             <div className="p-6 space-y-5">
-              {/* Seletor de Tipo de Documento: NFC-e ou NF-e */}
-              <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
-                  Escolha o Tipo de Documento Fiscal
-                </label>
-                <div className="grid grid-cols-2 gap-3">
-                  <button
-                    type="button"
-                    onClick={() => setTipoDocumentoEmissao('nfce')}
-                    className={cn(
-                      "p-3.5 rounded-xl border text-left transition-all",
-                      tipoDocumentoEmissao === 'nfce'
-                        ? "border-emerald-500 bg-emerald-500/10 ring-2 ring-emerald-500/30"
-                        : "border-border hover:bg-muted/50"
-                    )}
-                  >
-                    <div className="flex items-center gap-2 font-bold text-sm text-foreground">
-                      <Receipt size={16} className="text-emerald-600" />
-                      Cupom Fiscal (NFC-e)
-                    </div>
-                    <p className="text-[11px] text-muted-foreground mt-1">
-                      Modelo 65 · Varejo e Balcão. Emissão rápida em bobina 80mm com QR Code.
-                    </p>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => setTipoDocumentoEmissao('nfe')}
-                    className={cn(
-                      "p-3.5 rounded-xl border text-left transition-all",
-                      tipoDocumentoEmissao === 'nfe'
-                        ? "border-primary bg-primary/10 ring-2 ring-primary/30"
-                        : "border-border hover:bg-muted/50"
-                    )}
-                  >
-                    <div className="flex items-center gap-2 font-bold text-sm text-foreground">
-                      <FileText size={16} className="text-primary" />
-                      Nota Fiscal (NF-e)
-                    </div>
-                    <p className="text-[11px] text-muted-foreground mt-1">
-                      Modelo 55 · DANFE A4 tradicional. Obrigatória para transporte de carga e PJ.
-                    </p>
-                  </button>
+              {/* Documento Fiscal: Somente Cupom Fiscal (NFC-e) */}
+              <div className="p-3.5 rounded-xl border border-emerald-500 bg-emerald-500/10">
+                <div className="flex items-center gap-2 font-bold text-sm text-foreground">
+                  <Receipt size={16} className="text-emerald-600" />
+                  Cupom Fiscal (NFC-e · Modelo 65)
                 </div>
+                <p className="text-[11px] text-muted-foreground mt-1">
+                  Emissão em bobina térmica 80mm com QR Code oficial. Para despacho de carga, utilize o botão <strong>Etiqueta</strong> na venda.
+                </p>
               </div>
 
               {/* Alerta de Ambiente SEFAZ */}
@@ -937,6 +948,13 @@ export default function Vendas() {
           dados={danfeAtivo.dados}
           resultado={danfeAtivo.resultado}
           onClose={() => setDanfeAtivo(null)}
+        />
+      )}
+
+      {etiquetaAtiva && (
+        <EtiquetaTransporteModal
+          dados={etiquetaAtiva}
+          onClose={() => setEtiquetaAtiva(null)}
         />
       )}
     </div>

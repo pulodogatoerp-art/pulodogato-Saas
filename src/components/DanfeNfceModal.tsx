@@ -85,7 +85,7 @@ export default function DanfeNfceModal({ dados, resultado, onClose }: DanfeNfceM
   const temCliente = docDest.length > 0 || (dados.destinatario.nome && dados.destinatario.nome !== 'Consumidor Final (Balcão)' && dados.destinatario.nome !== 'CONSUMIDOR');
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/60 backdrop-blur-sm overflow-y-auto print:p-0 print:bg-white print:static">
+    <div className="nfce-print-root fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/60 backdrop-blur-sm overflow-y-auto print:p-0 print:bg-white print:static">
       <div className="relative w-full max-w-md bg-white text-black rounded-2xl shadow-2xl overflow-hidden my-auto print:shadow-none print:w-full print:max-w-none print:rounded-none">
         
         {/* Header de Ações (Oculto na Impressão) */}
@@ -143,11 +143,21 @@ export default function DanfeNfceModal({ dados, resultado, onClose }: DanfeNfceM
               size: 80mm auto;
               margin: 0;
             }
-            body {
+            body * {
+              visibility: hidden !important;
+            }
+            .nfce-print-root,
+            .nfce-print-root .nfce-container,
+            .nfce-print-root .nfce-container * {
+              visibility: visible !important;
+            }
+            .nfce-print-root {
+              position: absolute !important;
+              inset: 0 !important;
               background: #fff !important;
-              color: #000 !important;
-              margin: 0 !important;
               padding: 0 !important;
+              margin: 0 !important;
+              display: block !important;
             }
             .nfce-container {
               width: 76mm !important;

@@ -1,5 +1,5 @@
 import { useState, useMemo, useRef, useEffect } from 'react';
-import { Search, Plus, Trash2, FileText, MessageCircle, ShoppingCart, User, UserCheck, Package, X, ChevronDown, Eye, Printer, ArrowLeft, Loader2, List, Edit2, CreditCard, QrCode, TrendingUp, Receipt } from 'lucide-react';
+import { Search, Plus, Trash2, FileText, MessageCircle, ShoppingCart, User, UserCheck, Package, X, ChevronDown, Eye, Printer, ArrowLeft, Loader2, List, Edit2, CreditCard, QrCode, TrendingUp, Receipt, Truck } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
@@ -11,6 +11,7 @@ import { useCadastroModal } from '@/contexts/CadastroModalContext';
 import BuscaPecasIA from '@/components/BuscaPecasIA';
 import DanfeModal from '@/components/DanfeModal';
 import DanfeNfceModal from '@/components/DanfeNfceModal';
+import EtiquetaTransporteModal, { EtiquetaTransporteProps } from '@/components/EtiquetaTransporteModal';
 import { NFeVendaData, NFeResultado, emitirDocumentoFiscal } from '@/services/nfeService';
 
 /* ------------------------------------------------------------------ */
@@ -510,6 +511,7 @@ export default function Orcamentos() {
 
   const [emissaoFiscal, setEmissaoFiscal] = useState<'nfce' | 'nfe' | 'nenhum'>('nfce');
   const [danfeAtivo, setDanfeAtivo] = useState<{ dados: NFeVendaData; resultado: NFeResultado } | null>(null);
+  const [etiquetaAtiva, setEtiquetaAtiva] = useState<EtiquetaTransporteProps['dados'] | null>(null);
 
   const { data: categoriasDisponiveis = [] } = useQuery({
     queryKey: ['produtos-categorias'],
@@ -1160,6 +1162,44 @@ export default function Orcamentos() {
 
           <button
             onClick={() => {
+              setEtiquetaAtiva({
+                numeroVenda: selectedOrc.numero,
+                dataEmissao: new Date(selectedOrc.created_at),
+                valorTotal: Number(selectedOrc.total),
+                freteTransportadora: selectedOrc.frete_transportadora || undefined,
+                freteValor: Number(selectedOrc.frete_valor || 0),
+                remetente: {
+                  nomeFantasia: configFiscal?.['empresa_nome_fantasia'] || (empresa as any)?.empresa_nome_fantasia || 'G Autopeças & Acessórios',
+                  razaoSocial: configFiscal?.['empresa_nome'] || (empresa as any)?.empresa_nome || '',
+                  cnpj: configFiscal?.['empresa_cnpj'] || (empresa as any)?.empresa_cnpj || '',
+                  endereco: configFiscal?.['empresa_endereco'] || (empresa as any)?.empresa_endereco || '',
+                  cidade: configFiscal?.['empresa_cidade'] || 'Campo Grande',
+                  uf: configFiscal?.['empresa_uf'] || 'MS',
+                  cep: configFiscal?.['empresa_cep'] || '',
+                  telefone: configFiscal?.['empresa_telefone'] || (empresa as any)?.empresa_telefone || '',
+                },
+                destinatario: {
+                  nome: clienteFechamento?.nome || selectedOrc.cliente_nome || 'Consumidor Final',
+                  cpfCnpj: clienteFechamento?.cpf_cnpj || selectedOrc.cliente_cpf_cnpj || '',
+                  endereco: clienteFechamento?.endereco || '',
+                  cidade: configFiscal?.['empresa_cidade'] || 'Campo Grande',
+                  uf: configFiscal?.['empresa_uf'] || 'MS',
+                  telefone: clienteFechamento?.telefone || selectedOrc.cliente_telefone || '',
+                },
+                itens: (itensDetail ?? []).map((it) => ({
+                  codigo: it.produto_codigo || '',
+                  descricao: it.produto_nome,
+                  quantidade: Number(it.quantidade || 1),
+                })),
+              });
+            }}
+            className="inline-flex items-center gap-2 rounded-lg border border-amber-500/40 text-amber-700 dark:text-amber-400 hover:bg-amber-500/10 px-4 py-2.5 text-sm font-semibold transition-all active:scale-95"
+          >
+            <Truck size={15} /> Etiqueta Transporte
+          </button>
+
+          <button
+            onClick={() => {
               setWaNumber((selectedOrc.cliente_telefone || '').replace(/\D/g, ''));
               setShowWaModal(true);
             }}
@@ -1475,7 +1515,7 @@ export default function Orcamentos() {
                   <p className="text-xs font-semibold uppercase tracking-wide text-primary flex items-center gap-1.5">
                     <Receipt size={14} /> Emissão Fiscal no Fechamento
                   </p>
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                     <label className={cn(
                       "flex items-center gap-2 p-2 rounded-lg border text-xs cursor-pointer transition-colors",
                       emissaoFiscal === 'nfce' ? "border-emerald-500 bg-emerald-500/10 font-semibold text-emerald-800 dark:text-emerald-300" : "hover:bg-muted"
@@ -1487,21 +1527,7 @@ export default function Orcamentos() {
                         onChange={() => setEmissaoFiscal('nfce')}
                         className="accent-emerald-600"
                       />
-                      <span>🧾 Cupom (NFC-e)</span>
-                    </label>
-
-                    <label className={cn(
-                      "flex items-center gap-2 p-2 rounded-lg border text-xs cursor-pointer transition-colors",
-                      emissaoFiscal === 'nfe' ? "border-primary bg-primary/10 font-semibold text-primary" : "hover:bg-muted"
-                    )}>
-                      <input
-                        type="radio"
-                        name="emissaoFiscal"
-                        checked={emissaoFiscal === 'nfe'}
-                        onChange={() => setEmissaoFiscal('nfe')}
-                        className="accent-primary"
-                      />
-                      <span>📄 NF-e (A4)</span>
+                      <span>🧾 Cupom Fiscal (NFC-e)</span>
                     </label>
 
                     <label className={cn(
@@ -2105,6 +2131,13 @@ export default function Orcamentos() {
           dados={danfeAtivo.dados}
           resultado={danfeAtivo.resultado}
           onClose={() => setDanfeAtivo(null)}
+        />
+      )}
+
+      {etiquetaAtiva && (
+        <EtiquetaTransporteModal
+          dados={etiquetaAtiva}
+          onClose={() => setEtiquetaAtiva(null)}
         />
       )}
     </div>
