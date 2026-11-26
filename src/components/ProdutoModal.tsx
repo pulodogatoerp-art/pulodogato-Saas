@@ -237,14 +237,19 @@ export default function ProdutoModal({
     try {
       const dados = await buscarDadosPorReferencia(codigo);
       if (dados.encontrado) {
+        const isPlaceholderAplicacao = (val: string) =>
+          !val.trim() || val.trim().toLowerCase().startsWith('a definir');
+
         setForm((f: any) => ({
           ...f,
-          nome: f.nome.trim() ? f.nome : (dados.nome || f.nome),
-          marca: f.marca.trim() ? f.marca : (dados.marca || f.marca),
+          nome: !silentIfNotFound && dados.nome ? dados.nome : (f.nome.trim() ? f.nome : (dados.nome || f.nome)),
+          marca: !silentIfNotFound && dados.marca ? dados.marca : (f.marca.trim() ? f.marca : (dados.marca || f.marca)),
           categoria: dados.categoria || f.categoria,
           tipoVeiculo: dados.tipo_veiculo || f.tipoVeiculo,
-          aplicacao: f.aplicacao.trim() ? f.aplicacao : (dados.aplicacao || f.aplicacao),
-          ncm: f.ncm.trim() ? f.ncm : (dados.ncm || f.ncm),
+          aplicacao: dados.aplicacao && (!silentIfNotFound || isPlaceholderAplicacao(f.aplicacao))
+            ? dados.aplicacao
+            : f.aplicacao,
+          ncm: !silentIfNotFound && dados.ncm ? dados.ncm : (f.ncm.trim() ? f.ncm : (dados.ncm || f.ncm)),
         }));
         const msg = dados.observacao || `Dados extraídos da referência ${dados.codigoReferencia}.`;
         setRefInfo(msg);

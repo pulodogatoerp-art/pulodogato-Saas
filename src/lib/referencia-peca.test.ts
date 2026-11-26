@@ -23,12 +23,13 @@ describe('Assistente de Busca por Referência de Peça', () => {
     expect(res.aplicacao).toContain('ONIX');
   });
 
-  it('infere fabricante, categoria e NCM pelo padrão de código (ex: N-999 Cobreq)', async () => {
+  it('infere fabricante, categoria, NCM e aplicação pelo padrão de código (ex: N-999 Cobreq)', async () => {
     const res = await buscarDadosPorReferencia('N-999');
     expect(res.encontrado).toBe(true);
     expect(res.marca).toBe('COBREQ');
     expect(res.categoria).toBe('Freios');
     expect(res.ncm).toBe('87083019');
+    expect(res.aplicacao).toBeTruthy();
   });
 
   it('retorna encontrado=false para código muito curto', async () => {
