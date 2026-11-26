@@ -139,28 +139,45 @@ export async function baixarXmlSefazPorChave(params: {
     console.warn('Consulta no banco local aviso:', err);
   }
 
-  // 2. Se houver token da API Focus NFe, consulta via Edge Function (sem CORS) e depois direto
-  if (params.tokenFocus && params.tokenFocus.trim()) {
-    try {
-      const { data: fnData, error: fnErr } = await supabase.functions.invoke('sefaz-dfe', {
-        body: {
-          action: 'baixar',
-          chaveAcesso: chaveLimpa,
-          cnpjDestinatario: params.cnpjDestinatario,
-          tokenFocus: params.tokenFocus.trim(),
-          ambiente: params.ambiente || 'producao',
-        },
-      });
+  // 2. Consulta direta na SEFAZ via Edge Function `sefaz-dfe` (usa Certificado Digital A1 ou Token Focus NFe)
+  try {
+    const { data: fnData, error: fnErr } = await supabase.functions.invoke('sefaz-dfe', {
+      body: {
+        action: 'baixar',
+        chaveAcesso: chaveLimpa,
+        cnpjDestinatario: params.cnpjDestinatario,
+        tokenFocus: params.tokenFocus?.trim() || undefined,
+        // NF-es reais emitidas por fornecedores contra o CNPJ estão no ambiente de Produção da SEFAZ
+        ambiente: 'producao',
+      },
+    });
 
-      if (!fnErr && fnData?.xmlText && fnData.xmlText.includes('<infNFe')) {
-        return { xmlText: fnData.xmlText, origem: 'sefaz_dfe' };
-      }
-      if (fnData?.error) {
-        throw new Error(fnData.error);
-      }
-    } catch (edgeErr: any) {
-      console.warn('Edge function sefaz-dfe indisponível, tentando API Focus direta:', edgeErr?.message);
+    if (!fnErr && fnData?.xmlText && fnData.xmlText.includes('<infNFe')) {
+      return { xmlText: fnData.xmlText, origem: fnData.origem || 'sefaz_dfe' };
     }
+    if (fnData?.error) {
+      throw new Error(fnData.error);
+    }
+    if (fnErr) {
+      const ctx = (fnErr as any)?.context;
+      if (ctx instanceof Response) {
+        const errBody = await ctx.json().catch(() => null);
+        if (errBody?.error) throw new Error(errBody.error);
+      }
+      throw new Error(fnErr.message);
+    }
+  } catch (edgeErr: any) {
+    // Se não houver token Focus, propaga o erro real da SEFAZ/A1 em vez de gerar dados falsos
+    if (!params.tokenFocus || !params.tokenFocus.trim()) {
+      throw new Error(
+        edgeErr?.message ||
+          `Chave decodificada (NF nº ${dec.numero} · Série ${dec.serie} · CNPJ ${dec.cnpjEmitente}), mas não foi possível baixar o XML da SEFAZ. Verifique a senha do Certificado A1 em Configuração Fiscal.`
+      );
+    }
+  }
+
+  // 3. Fallback: se houver token Focus NFe e a Edge Function falhou, tenta Focus direta
+  if (params.tokenFocus && params.tokenFocus.trim()) {
 
     try {
       const endpointPrefix = params.ambiente === 'producao'
