@@ -1,5 +1,5 @@
 import { useAppContext } from '@/components/Layout';
-import { ShoppingCart, Loader2, Eye, X, FileText, Printer, Download, CheckCircle, AlertCircle, Send, Receipt, UserCheck } from 'lucide-react';
+import { ShoppingCart, Loader2, Eye, X, FileText, Printer, Download, CheckCircle, AlertCircle, Send, Receipt, UserCheck, XCircle } from 'lucide-react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { useState } from 'react';
@@ -12,6 +12,7 @@ import {
   ModeloFiscal,
   getVendaNFeRecord,
   emitirDocumentoFiscal,
+  cancelarDocumentoFiscal,
   baixarXmlNFe,
 } from '@/services/nfeService';
 import DanfeModal from '@/components/DanfeModal';
@@ -108,6 +109,9 @@ export default function Vendas() {
   const { data: itensParaEmitir } = useItensVenda(vendaParaEmitir?.id ?? null);
   const [danfeAtivo, setDanfeAtivo] = useState<{ dados: NFeVendaData; resultado: NFeResultado } | null>(null);
   const [emitindo, setEmitindo] = useState(false);
+  const [docParaCancelar, setDocParaCancelar] = useState<{ venda: VendaDB; nfeRecord?: NFeResultado | null } | null>(null);
+  const [justificativaCancelamento, setJustificativaCancelamento] = useState('');
+  const [cancelando, setCancelando] = useState(false);
 
   // Formulário do destinatário para emissão (permite conferir/editar dados no modal)
   const [destinatarioForm, setDestinatarioForm] = useState({
@@ -283,6 +287,56 @@ export default function Vendas() {
     }
   };
 
+  const handleConfirmarCancelamento = async () => {
+    if (!docParaCancelar) return;
+    const just = justificativaCancelamento.trim();
+    if (just.length < 15) {
+      toast({
+        title: 'Justificativa muito curta',
+        description: 'A SEFAZ exige no mínimo 15 caracteres para cancelar NF-e ou NFC-e.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    setCancelando(true);
+    try {
+      const { venda, nfeRecord } = docParaCancelar;
+      const tipoDoc: TipoDocumentoFiscal = (nfeRecord?.tipo || venda.tipo_documento_fiscal) === 'nfce' ? 'nfce' : 'nfe';
+      const ambiente = (config?.['nfe_ambiente'] || 'homologacao') as 'homologacao' | 'producao';
+      const res = await cancelarDocumentoFiscal({
+        vendaId: venda.id,
+        vendaNumero: venda.numero,
+        chaveAcesso: nfeRecord?.chaveAcesso || venda.nfe_chave || '',
+        numero: nfeRecord?.numero || Number(venda.nfe_numero || 1),
+        serie: nfeRecord?.serie || '1',
+        tipo: tipoDoc,
+        justificativa: just,
+        ambiente,
+        tokenFocus: config?.['nfe_focus_token'],
+      });
+
+      queryClient.invalidateQueries({ queryKey: ['vendas'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard-nfes'] });
+      queryClient.invalidateQueries({ queryKey: ['nfe_importadas'] });
+
+      toast({
+        title: tipoDoc === 'nfce' ? 'Cupom Fiscal (NFC-e) cancelado!' : 'NF-e cancelada!',
+        description: `Protocolo: ${res.protocoloCancelamento}`,
+      });
+      setDocParaCancelar(null);
+      setJustificativaCancelamento('');
+    } catch (err: any) {
+      toast({
+        title: 'Erro ao cancelar documento fiscal',
+        description: err.message,
+        variant: 'destructive',
+      });
+    } finally {
+      setCancelando(false);
+    }
+  };
+
   // Abrir documento já emitido anteriormente (NFC-e ou NF-e)
   const handleAbrirDanfeExistente = (venda: VendaDB, nfeRecord?: NFeResultado | null) => {
     const isNfce = (nfeRecord?.tipo || venda.tipo_documento_fiscal) === 'nfce';
@@ -404,7 +458,8 @@ export default function Vendas() {
               <tbody>
                 {vendas.map(v => {
                   const nfeRecord = getVendaNFeRecord(v.id);
-                  const isEmitida = nfeRecord?.status === 'autorizada' || v.nfe_status === 'autorizada';
+                  const isCancelada = nfeRecord?.status === 'cancelada' || v.nfe_status === 'cancelada';
+                  const isEmitida = !isCancelada && (nfeRecord?.status === 'autorizada' || v.nfe_status === 'autorizada');
                   const isNfce = (nfeRecord?.tipo || v.tipo_documento_fiscal) === 'nfce';
                   const numDoc = nfeRecord?.numero || v.nfe_numero;
 
@@ -424,7 +479,12 @@ export default function Vendas() {
 
                       {/* Coluna de Status do Documento Fiscal */}
                       <td>
-                        {isEmitida ? (
+                        {isCancelada ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-semibold bg-red-500/15 text-red-600">
+                            <XCircle size={12} />
+                            {isNfce ? 'NFC-e' : 'NF-e'} Nº {numDoc} Cancelada
+                          </span>
+                        ) : isEmitida ? (
                           <div className="flex items-center gap-1.5">
                             {isNfce ? (
                               <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-semibold bg-emerald-500/15 text-emerald-600">
@@ -448,13 +508,13 @@ export default function Vendas() {
                       {/* Botões de Ação */}
                       <td className="text-right">
                         <div className="flex items-center justify-end gap-1.5">
-                          {isEmitida ? (
+                          {(isEmitida || isCancelada) ? (
                             <>
                               <button
                                 onClick={() => handleAbrirDanfeExistente(v, nfeRecord)}
                                 className={cn(
                                   "px-2.5 py-1 text-xs font-semibold rounded-md text-white transition-colors flex items-center gap-1 shadow-sm",
-                                  isNfce ? "bg-emerald-600 hover:bg-emerald-500" : "bg-blue-600 hover:bg-blue-500"
+                                  isCancelada ? "bg-slate-600 hover:bg-slate-500" : isNfce ? "bg-emerald-600 hover:bg-emerald-500" : "bg-blue-600 hover:bg-blue-500"
                                 )}
                                 title={isNfce ? "Visualizar e Imprimir Cupom Fiscal (80mm)" : "Visualizar e Imprimir DANFE A4"}
                               >
@@ -468,6 +528,28 @@ export default function Vendas() {
                                   title="Baixar XML oficial"
                                 >
                                   <Download size={14} />
+                                </button>
+                              )}
+                              {isEmitida && (
+                                <button
+                                  onClick={() => {
+                                    setDocParaCancelar({ venda: v, nfeRecord });
+                                    setJustificativaCancelamento('');
+                                  }}
+                                  className="px-2 py-1 text-xs font-semibold rounded-md border border-red-500/40 text-red-600 hover:bg-red-500/10 transition-colors flex items-center gap-1"
+                                  title={`Cancelar ${isNfce ? 'Cupom Fiscal (NFC-e)' : 'Nota Fiscal (NF-e)'} na SEFAZ`}
+                                >
+                                  <XCircle size={13} />
+                                  Cancelar
+                                </button>
+                              )}
+                              {isCancelada && (
+                                <button
+                                  onClick={() => handleAbrirEmissao(v, isNfce ? 'nfce' : 'nfe')}
+                                  className="px-2 py-1 text-xs font-semibold rounded-md border hover:bg-muted transition-colors"
+                                  title="Emitir novo documento fiscal para esta venda"
+                                >
+                                  Reemitir
                                 </button>
                               )}
                             </>
@@ -761,6 +843,77 @@ export default function Vendas() {
                     : tipoDocumentoEmissao === 'nfce'
                       ? 'Autorizar e Imprimir Cupom (NFC-e)'
                       : 'Autorizar e Gerar DANFE (NF-e)'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de Cancelamento de NFC-e / NF-e */}
+      {docParaCancelar && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-fade-in">
+          <div className="relative bg-background rounded-2xl shadow-xl w-full max-w-md border overflow-hidden">
+            <div className="flex items-center justify-between px-5 py-4 border-b bg-red-500/5">
+              <div className="flex items-center gap-2">
+                <XCircle className="text-red-600" size={20} />
+                <h2 className="font-bold text-base">
+                  Cancelar {(docParaCancelar.nfeRecord?.tipo || docParaCancelar.venda.tipo_documento_fiscal) === 'nfce' ? 'Cupom Fiscal (NFC-e)' : 'Nota Fiscal (NF-e)'}
+                </h2>
+              </div>
+              <button
+                onClick={() => setDocParaCancelar(null)}
+                disabled={cancelando}
+                className="p-1.5 rounded-lg hover:bg-muted"
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <div className="p-5 space-y-4">
+              <div className="rounded-lg border bg-muted/20 p-3 text-xs space-y-1">
+                <p><strong>Venda:</strong> {docParaCancelar.venda.numero} · {docParaCancelar.venda.cliente_nome}</p>
+                <p><strong>Documento Nº:</strong> {docParaCancelar.nfeRecord?.numero || docParaCancelar.venda.nfe_numero}</p>
+                <p className="font-mono text-[11px] text-muted-foreground break-all">
+                  Chave: {docParaCancelar.nfeRecord?.chaveAcesso || docParaCancelar.venda.nfe_chave}
+                </p>
+              </div>
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                    Justificativa do Cancelamento (SEFAZ) *
+                  </label>
+                  <span className={cn(
+                    "text-[11px] font-mono",
+                    justificativaCancelamento.trim().length >= 15 ? "text-emerald-600" : "text-amber-600"
+                  )}>
+                    {justificativaCancelamento.trim().length}/15 mín.
+                  </span>
+                </div>
+                <textarea
+                  value={justificativaCancelamento}
+                  onChange={e => setJustificativaCancelamento(e.target.value)}
+                  rows={3}
+                  placeholder="Ex: Erro no preenchimento dos dados ou desistência da compra pelo cliente."
+                  className="w-full rounded-lg border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-500/30"
+                />
+              </div>
+              <div className="flex gap-2 justify-end pt-1">
+                <button
+                  type="button"
+                  onClick={() => setDocParaCancelar(null)}
+                  disabled={cancelando}
+                  className="px-4 py-2 rounded-lg border text-sm font-medium hover:bg-muted"
+                >
+                  Voltar
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConfirmarCancelamento}
+                  disabled={cancelando || justificativaCancelamento.trim().length < 15}
+                  className="px-4 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white text-sm font-semibold flex items-center gap-2 disabled:opacity-50"
+                >
+                  {cancelando && <Loader2 size={14} className="animate-spin" />}
+                  Confirmar Cancelamento
                 </button>
               </div>
             </div>

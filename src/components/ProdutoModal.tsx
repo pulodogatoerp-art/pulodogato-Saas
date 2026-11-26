@@ -2,13 +2,14 @@ import React, { useState, useMemo, useRef, useEffect } from 'react';
 import {
   Plus, X, Loader2, Calculator, FileText, TrendingUp, TrendingDown,
   Copy, Save, Upload, Link as LinkIcon, Image as ImageIcon, Sparkles, CheckCircle2, Trash2,
-  Minus, Maximize2, Package
+  Minus, Maximize2, Package, Search
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { toast } from '@/hooks/use-toast';
 import { useAuth } from '@/hooks/useAuth';
 import { supabase } from '@/integrations/supabase/client';
 import { compressImageToWebP, formatFileSize } from '@/lib/image-compress';
+import { buscarDadosPorReferencia } from '@/services/referenciaPecaService';
 
 const categoriasDefault = ['Filtros', 'Freios', 'Suspensão', 'Motor', 'Arrefecimento'];
 const tiposVeiculo = ['Carro', 'Moto', 'Pesado', 'Agrícola'];
@@ -133,6 +134,8 @@ export default function ProdutoModal({
   const [showLinkInput, setShowLinkInput] = useState(false);
   const [uploadingImage, setUploadingImage] = useState(false);
   const [compressionInfo, setCompressionInfo] = useState<string | null>(null);
+  const [buscandoRef, setBuscandoRef] = useState(false);
+  const [refInfo, setRefInfo] = useState<string | null>(null);
 
   const getInitialForm = () => {
     if (produto) {
@@ -220,6 +223,48 @@ export default function ProdutoModal({
       } catch {}
     }
   }, [form, produto]);
+
+  const handleBuscarReferencia = async (silentIfNotFound = false) => {
+    const codigo = form.codigoFabrica.trim();
+    if (codigo.length < 2) {
+      if (!silentIfNotFound) {
+        toast({ title: 'Digite o código ou referência da peça primeiro', variant: 'destructive' });
+      }
+      return;
+    }
+
+    setBuscandoRef(true);
+    try {
+      const dados = await buscarDadosPorReferencia(codigo);
+      if (dados.encontrado) {
+        setForm((f: any) => ({
+          ...f,
+          nome: f.nome.trim() ? f.nome : (dados.nome || f.nome),
+          marca: f.marca.trim() ? f.marca : (dados.marca || f.marca),
+          categoria: dados.categoria || f.categoria,
+          tipoVeiculo: dados.tipo_veiculo || f.tipoVeiculo,
+          aplicacao: f.aplicacao.trim() ? f.aplicacao : (dados.aplicacao || f.aplicacao),
+          ncm: f.ncm.trim() ? f.ncm : (dados.ncm || f.ncm),
+        }));
+        const msg = dados.observacao || `Dados extraídos da referência ${dados.codigoReferencia}.`;
+        setRefInfo(msg);
+        toast({
+          title: 'Assistente de Referência',
+          description: msg,
+        });
+      } else {
+        setRefInfo(null);
+        if (!silentIfNotFound) {
+          toast({
+            title: 'Referência não localizada automaticamente',
+            description: 'Preencha os dados manualmente para cadastrar esta peça.',
+          });
+        }
+      }
+    } finally {
+      setBuscandoRef(false);
+    }
+  };
 
   const handleAddCategory = () => {
     const trimmed = newCat.trim();
@@ -667,13 +712,44 @@ export default function ProdutoModal({
               <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">
                 Código de Fábrica / Ref.
               </label>
-              <input
-                name="codigoFabrica"
-                value={form.codigoFabrica}
-                onChange={handleChange}
-                placeholder="Ex: SE 32760"
-                className={inputClass}
-              />
+              <div className="flex gap-1.5">
+                <input
+                  name="codigoFabrica"
+                  value={form.codigoFabrica}
+                  onChange={(e) => {
+                    setRefInfo(null);
+                    handleChange(e);
+                  }}
+                  onBlur={() => {
+                    if (!produto?.id && form.codigoFabrica.trim().length >= 3 && !form.nome.trim()) {
+                      handleBuscarReferencia(true);
+                    }
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      handleBuscarReferencia(false);
+                    }
+                  }}
+                  placeholder="Ex: PSL55, W712/75, N-1445"
+                  className={cn(inputClass, 'flex-1 font-mono')}
+                />
+                <button
+                  type="button"
+                  onClick={() => handleBuscarReferencia(false)}
+                  disabled={buscandoRef || !form.codigoFabrica.trim()}
+                  title="Assistente: completar dados pela referência/código"
+                  className="px-2.5 py-2 rounded-lg bg-primary/10 hover:bg-primary/20 text-primary border border-primary/30 text-xs font-semibold flex items-center gap-1 shrink-0 transition-colors disabled:opacity-50"
+                >
+                  {buscandoRef ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
+                  <span className="hidden sm:inline">Buscar</span>
+                </button>
+              </div>
+              {refInfo && (
+                <p className="text-[10px] text-emerald-600 font-medium mt-1 flex items-center gap-1">
+                  <Sparkles size={11} className="shrink-0" /> {refInfo}
+                </p>
+              )}
             </div>
 
             <div>

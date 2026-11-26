@@ -4,6 +4,7 @@ import {
   gerarQrCodeNfce,
   gerarXmlNFe,
   emitirDocumentoFiscal,
+  cancelarDocumentoFiscal,
   NFeVendaData,
 } from '@/services/nfeService';
 
@@ -127,5 +128,33 @@ describe('Cupom Fiscal (NFC-e Modelo 65) em Homologação', () => {
     expect(res.qrCodeUrl).toContain('|2|2|1|');
     expect(res.xml).toContain('<mod>65</mod>');
     expect(res.mensagem).toContain('Homologação');
+  });
+
+  it('cancela NFC-e e NF-e exigindo justificativa mínima de 15 caracteres', async () => {
+    const emitida = await emitirDocumentoFiscal(baseDados);
+    await expect(
+      cancelarDocumentoFiscal({
+        vendaId: baseDados.vendaId,
+        vendaNumero: baseDados.vendaNumero,
+        chaveAcesso: emitida.chaveAcesso,
+        numero: emitida.numero,
+        tipo: 'nfce',
+        justificativa: 'curta',
+        ambiente: 'homologacao',
+      })
+    ).rejects.toThrow(/15 caracteres/i);
+
+    const cancelada = await cancelarDocumentoFiscal({
+      vendaId: baseDados.vendaId,
+      vendaNumero: baseDados.vendaNumero,
+      chaveAcesso: emitida.chaveAcesso,
+      numero: emitida.numero,
+      tipo: 'nfce',
+      justificativa: 'Erro no preenchimento da venda em teste de homologação.',
+      ambiente: 'homologacao',
+    });
+    expect(cancelada.status).toBe('cancelada');
+    expect(cancelada.protocoloCancelamento).toBeTruthy();
+    expect(cancelada.motivoCancelamento).toContain('Erro no preenchimento');
   });
 });
