@@ -1,5 +1,5 @@
 import { useState, useMemo, useRef, useEffect } from 'react';
-import { Search, Plus, Trash2, FileText, MessageCircle, ShoppingCart, User, UserCheck, Package, X, ChevronDown, Eye, Printer, ArrowLeft, Loader2, List, Edit2, CreditCard, QrCode, TrendingUp, Receipt, Truck } from 'lucide-react';
+import { Search, Plus, Trash2, FileText, MessageCircle, ShoppingCart, User, UserCheck, Package, X, ChevronDown, Eye, Printer, ArrowLeft, Loader2, List, Edit2, CreditCard, QrCode, TrendingUp, Receipt, Truck, Car } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
@@ -9,6 +9,14 @@ import logoGAutopecas from '@/assets/logo-g-autopecas.jpg';
 import ProdutoModal, { SimulacaoCustoSnapshot } from '@/components/ProdutoModal';
 import { useCadastroModal } from '@/contexts/CadastroModalContext';
 import BuscaPecasIA from '@/components/BuscaPecasIA';
+import FiltroVeiculoPecas from '@/components/FiltroVeiculoPecas';
+import {
+  EMPTY_VEHICLE_FILTER,
+  buildVehicleSearchTokens,
+  hasActiveVehicleFilter,
+  matchesVehicleFilter,
+  type VehicleFilterState,
+} from '@/lib/vehicle-catalog';
 import DanfeModal from '@/components/DanfeModal';
 import DanfeNfceModal from '@/components/DanfeNfceModal';
 import EtiquetaTransporteModal, { EtiquetaTransporteProps } from '@/components/EtiquetaTransporteModal';
@@ -58,16 +66,19 @@ function useClientes(search: string) {
   });
 }
 
-function useProdutos(search: string) {
+function useProdutos(search: string, vehicleFilter: VehicleFilterState) {
+  const vehicleActive = hasActiveVehicleFilter(vehicleFilter);
   return useQuery({
-    queryKey: ['produtos-search', search],
+    queryKey: ['produtos-search', search, vehicleFilter],
     queryFn: async () => {
-      const tokens = search
+      const searchTokens = search
         .replace(/[,()]/g, ' ')
         .split(/\s+/)
         .map(t => t.trim())
-        .filter(t => t.length > 0)
-        .slice(0, 5);
+        .filter(t => t.length > 0);
+      const vehicleTokens = buildVehicleSearchTokens(vehicleFilter);
+      const tokens = [...searchTokens, ...vehicleTokens].slice(0, 5);
+
       let q = supabase
         .from('produtos')
         .select('id, codigo, codigo_fabrica, codigo_interno, nome, marca, aplicacao, categoria, tipo_veiculo, preco_venda, estoque_total');
@@ -77,11 +88,12 @@ function useProdutos(search: string) {
           `nome.ilike.%${esc}%,codigo.ilike.%${esc}%,codigo_fabrica.ilike.%${esc}%,codigo_interno.ilike.%${esc}%,aplicacao.ilike.%${esc}%,marca.ilike.%${esc}%,categoria.ilike.%${esc}%,tipo_veiculo.ilike.%${esc}%`
         );
       }
-      const { data, error } = await q.limit(8);
+      const { data, error } = await q.limit(vehicleActive ? 100 : 8);
       if (error) throw error;
-      return (data ?? []) as ProdutoDB[];
+      const list = (data ?? []) as ProdutoDB[];
+      return vehicleActive ? list.filter(p => matchesVehicleFilter(p, vehicleFilter)).slice(0, 12) : list;
     },
-    enabled: search.length > 1,
+    enabled: search.length > 1 || vehicleActive,
   });
 }
 
@@ -444,6 +456,8 @@ export default function Orcamentos() {
   const [showAlterarCliente, setShowAlterarCliente] = useState(false);
   const [buscaClienteFechamento, setBuscaClienteFechamento] = useState('');
   const [produtoSearch, setProdutoSearch] = useState('');
+  const [vehicleFilter, setVehicleFilter] = useState<VehicleFilterState>(EMPTY_VEHICLE_FILTER);
+  const [showVehicleFilter, setShowVehicleFilter] = useState(false);
   const [itens, setItens] = useState<ItemLocal[]>([]);
   const [desconto, setDesconto] = useState(0);
   const [freteTransportadora, setFreteTransportadora] = useState('');
@@ -481,7 +495,7 @@ export default function Orcamentos() {
 
   const { data: clientes } = useClientes(clienteSearch);
   const { data: clientesFechamentoList } = useClientes(buscaClienteFechamento);
-  const { data: produtos } = useProdutos(produtoSearch);
+  const { data: produtos } = useProdutos(produtoSearch, vehicleFilter);
   const { data: orcamentos, isLoading } = useOrcamentos();
   const { data: itensDetail } = useItensOrcamento(selectedId);
   const { data: empresa } = useEmpresa();
@@ -1867,11 +1881,38 @@ export default function Orcamentos() {
 
           {/* Produtos */}
           <div className="rounded-xl border bg-card shadow-sm p-5">
-            <div className="flex items-center gap-2 mb-4">
+            <div className="flex flex-wrap items-center gap-2 mb-3">
               <Package size={16} className="text-primary" />
               <h2 className="font-semibold text-sm">Adicionar Peças</h2>
-              {(role === 'admin' || role === 'vendedor') && <div className="ml-auto"><BuscaPecasIA onAdd={addItem} /></div>}
+              <div className="ml-auto flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowVehicleFilter(v => !v)}
+                  className={cn(
+                    'inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium transition-colors',
+                    showVehicleFilter || hasActiveVehicleFilter(vehicleFilter)
+                      ? 'border-primary bg-primary/10 text-primary'
+                      : 'border-border bg-background text-muted-foreground hover:text-foreground',
+                  )}
+                >
+                  <Car size={14} />
+                  Filtro por Veículo
+                </button>
+                {(role === 'admin' || role === 'vendedor') && <BuscaPecasIA onAdd={addItem} />}
+              </div>
             </div>
+            {(showVehicleFilter || hasActiveVehicleFilter(vehicleFilter)) && (
+              <div className="mb-3">
+                <FiltroVeiculoPecas
+                  compact
+                  value={vehicleFilter}
+                  onChange={(next) => {
+                    setVehicleFilter(next);
+                    if (hasActiveVehicleFilter(next)) setShowProdutoDD(true);
+                  }}
+                />
+              </div>
+            )}
             <div className="relative flex items-stretch gap-2">
               <div className="relative flex-1">
                 <Search size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-muted-foreground" />

@@ -10,6 +10,13 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from '@/hooks/use-toast';
 import ProdutoModal from '@/components/ProdutoModal';
+import FiltroVeiculoPecas from '@/components/FiltroVeiculoPecas';
+import {
+  EMPTY_VEHICLE_FILTER,
+  hasActiveVehicleFilter,
+  matchesVehicleFilter,
+  type VehicleFilterState,
+} from '@/lib/vehicle-catalog';
 import { useCadastroModal } from '@/contexts/CadastroModalContext';
 import { exportToCsv, exportToExcel } from '@/lib/export';
 import { useNavigate } from 'react-router-dom';
@@ -92,7 +99,7 @@ export default function Produtos() {
   const [categoria, setCategoria] = useState('Todos');
   const [tipoVeic, setTipoVeic] = useState('Todos');
   const [marcaFiltro, setMarcaFiltro] = useState('Todas');
-  const [modeloFiltro, setModeloFiltro] = useState('');
+  const [vehicleFilter, setVehicleFilter] = useState<VehicleFilterState>(EMPTY_VEHICLE_FILTER);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [modal, setModal] = useState<'new' | ProdutoDB | null>(null);
 
@@ -246,7 +253,7 @@ export default function Produtos() {
     categoria !== 'Todos' ||
     tipoVeic !== 'Todos' ||
     marcaFiltro !== 'Todas' ||
-    modeloFiltro.trim().length > 0;
+    hasActiveVehicleFilter(vehicleFilter);
 
   // Filtragem rápida de produtos com proteção contra valores nulos
   const produtos = useMemo(() => {
@@ -270,18 +277,17 @@ export default function Produtos() {
       const matchCat = categoria === 'Todos' || p.categoria === categoria;
       const matchTipo = tipoVeic === 'Todos' || p.tipo_veiculo === tipoVeic;
       const matchMarca = marcaFiltro === 'Todas' || p.marca === marcaFiltro;
-      const m = modeloFiltro.trim().toLowerCase();
-      const matchModelo = !m || aplicacao.includes(m);
-      return matchSearch && matchCat && matchTipo && matchMarca && matchModelo;
+      const matchVehicle = matchesVehicleFilter(p, vehicleFilter);
+      return matchSearch && matchCat && matchTipo && matchMarca && matchVehicle;
     });
-  }, [search, categoria, tipoVeic, marcaFiltro, modeloFiltro, allProdutos]);
+  }, [search, categoria, tipoVeic, marcaFiltro, vehicleFilter, allProdutos]);
 
   const clearFilters = () => {
     setSearch('');
     setCategoria('Todos');
     setTipoVeic('Todos');
     setMarcaFiltro('Todas');
-    setModeloFiltro('');
+    setVehicleFilter(EMPTY_VEHICLE_FILTER);
   };
 
   // Funções do Carrinho / DAV
@@ -464,7 +470,9 @@ export default function Produtos() {
           )}
         </div>
 
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1">
+        <FiltroVeiculoPecas value={vehicleFilter} onChange={setVehicleFilter} />
+
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1">
           <select
             value={tipoVeic}
             onChange={e => setTipoVeic(e.target.value)}
@@ -481,12 +489,6 @@ export default function Produtos() {
             <option value="Todas">Marca da Peça (Todas)</option>
             {filterMarcas.map(m => <option key={m} value={m}>{m}</option>)}
           </select>
-          <input
-            value={modeloFiltro}
-            onChange={e => setModeloFiltro(e.target.value)}
-            placeholder="Filtrar modelo (ex: Uno, Gol, Onix)"
-            className="rounded-lg border bg-background px-2.5 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-primary"
-          />
           <select
             value={categoria}
             onChange={e => setCategoria(e.target.value)}
